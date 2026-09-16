@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent } from "react";
-import { Building2, ClipboardCheck, FileImage, MapPin, Pencil, Plus, Search, Ticket, Trash2, UploadCloud } from "lucide-react";
+import { Building2, CalendarDays, ClipboardCheck, FileImage, MapPin, Pencil, Plus, Search, Ticket, Trash2, UploadCloud } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -36,6 +36,12 @@ const rates = [
 ];
 const stores = ["岩槻本店", "桶川店", "平塚店", "ふじみ野店", "美女木店", "鶴瀬店"] as const;
 type Store = typeof stores[number];
+type MonthPhoto = { name: string; uploaded_at: string };
+const monthEndDate = (value: string) => {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) return "月を選択";
+  const [year, month] = value.split("-").map(Number);
+  return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+};
 
 async function optimizeImage(file: File) {
   const bitmap = await createImageBitmap(file);
@@ -82,6 +88,15 @@ export default function Home() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [month, setMonth] = useState(currentMonth);
+  const [view, setView] = useState<"register" | "month-end">("register");
+  const [monthPhoto, setMonthPhoto] = useState<MonthPhoto | null>(null);
+  const [monthPhotoLoading, setMonthPhotoLoading] = useState(false);
+  const [monthPhotoError, setMonthPhotoError] = useState("");
+  const [monthPhotoSuccess, setMonthPhotoSuccess] = useState("");
+  const [monthPhotoFile, setMonthPhotoFile] = useState<File | null>(null);
+  const [monthPhotoInputKey, setMonthPhotoInputKey] = useState(0);
+  const [monthPhotoVersion, setMonthPhotoVersion] = useState(0);
+  const [savingMonthPhoto, setSavingMonthPhoto] = useState(false);
   const [selected, setSelected] = useState<RecordItem | null>(null);
   const [editing, setEditing] = useState(false);
   const [editKind, setEditKind] = useState<"hold" | "manual">("hold");
@@ -121,6 +136,24 @@ export default function Home() {
     const timer = window.setTimeout(() => void loadRecords(month, store), 0);
     return () => window.clearTimeout(timer);
   }, [loadRecords, month, store]);
+  useEffect(() => {
+    if (!store || view !== "month-end") return;
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      setMonthPhotoLoading(true); setMonthPhotoError(""); setMonthPhoto(null);
+      try {
+        const response = await fetch(`/api/month-end?store=${encodeURIComponent(store)}&month=${encodeURIComponent(month)}`, { cache: "no-store" });
+        const data = await response.json() as { photo: MonthPhoto | null; error?: string };
+        if (!response.ok) throw new Error(data.error || "月末写真を読み込めませんでした。");
+        if (active) setMonthPhoto(data.photo);
+      } catch (caught) {
+        if (active) setMonthPhotoError(caught instanceof Error ? caught.message : "月末写真を読み込めませんでした。");
+      } finally {
+        if (active) setMonthPhotoLoading(false);
+      }
+    }, 0);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [store, month, view]);
   useEffect(() => {
     const context = (document as Document & { modelContext?: PageModelContext }).modelContext;
     if (!context?.registerTool) return;
@@ -274,15 +307,40 @@ export default function Home() {
       });
       const data = await response.json() as { deleted?: number; error?: string };
       if (!response.ok) throw new Error(data.error || "削除できませんでした。");
-      setRecords([]); setDeleteOpen(false); setDeletePassword("");
+      setRecords([]); setMonthPhoto(null); setMonthPhotoVersion(value => value + 1);
+      setDeleteOpen(false); setDeletePassword("");
       setSuccess(`${data.deleted ?? 0}件の記録を削除しました。`);
     } catch (caught) {
       setDeleteError(caught instanceof Error ? caught.message : "削除できませんでした。");
     } finally { setDeleting(false); }
   }
 
+  async function saveMonthPhoto(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!store || !monthPhotoFile) { setMonthPhotoError("ホールコン写真を選択してください。"); return; }
+    if (monthPhotoFile.size > 10 * 1024 * 1024) { setMonthPhotoError("写真は10MB以内にしてください。"); return; }
+    setMonthPhotoError(""); setMonthPhotoSuccess(""); setSavingMonthPhoto(true);
+    try {
+      const image = await optimizeImage(monthPhotoFile);
+      const body = new FormData();
+      body.set("store", store); body.set("month", month); body.set("photo", image);
+      const response = await fetch("/api/month-end", { method: "POST", body });
+      const data = await response.json() as { photo: MonthPhoto; error?: string };
+      if (!response.ok) throw new Error(data.error || "月末写真を保存できませんでした。");
+      setMonthPhoto(data.photo); setMonthPhotoVersion(value => value + 1);
+      setMonthPhotoFile(null); setMonthPhotoInputKey(value => value + 1);
+      setMonthPhotoSuccess("月末のホールコン写真を保存しました。");
+    } catch (caught) {
+      setMonthPhotoError(caught instanceof Error ? caught.message : "月末写真を保存できませんでした。");
+    } finally { setSavingMonthPhoto(false); }
+  }
+
+  function openRecord(row: RecordItem) {
+    setSelected(row); setDetailError(""); setManagerName(""); setHasInk(false);
+  }
+
   function chooseStore(value: Store) {
-    setStore(value); setRecords([]); setSearch(""); setFilter("all"); setLoadError(""); setSuccess(""); setError("");
+    setStore(value); setView("register"); setRecords([]); setSearch(""); setFilter("all"); setLoadError(""); setSuccess(""); setError("");
   }
 
   if (!store) return <main className="store-select-screen">
@@ -297,7 +355,9 @@ export default function Home() {
 
   return <main className="app-shell">
     <header className="topbar"><div className="brand"><span className="brand-mark"><Ticket size={20}/></span><div><strong>保留券・手入力管理</strong><small>{store}</small></div></div><button type="button" className="change-store" onClick={()=>setStore(null)}><MapPin size={15}/>{store}<span>変更</span></button></header>
+    <nav className="view-nav" aria-label="管理画面"><button type="button" className={view==="register"?"active":""} aria-current={view==="register"?"page":undefined} onClick={()=>setView("register")}><Ticket size={17}/>記録・台帳</button><button type="button" className={view==="month-end"?"active":""} aria-current={view==="month-end"?"page":undefined} onClick={()=>setView("month-end")}><CalendarDays size={17}/>月末確認</button></nav>
     <div className="workspace">
+      {view === "register" ? <>
       <div className="page-heading"><div><p className="eyebrow">記録台帳</p><h1>新しい記録を登録</h1><p className="page-intro">レシートを添付し、内容を入力してください。</p></div><span className="date-chip">本日の記録</span></div>
       <div className="columns">
         <section className="form-card" aria-labelledby="entry-heading">
@@ -318,12 +378,30 @@ export default function Home() {
           </form>
         </section>
         <section className="ledger-card" aria-labelledby="ledger-heading"><div className="ledger-heading"><div><p className="eyebrow">一覧</p><h2 id="ledger-heading">記録台帳</h2></div><span className="total-pill">{records.length} 件</span></div>
-          <div className="month-actions"><label className="month-picker" htmlFor="ledger-month"><span>確認する月</span><Input id="ledger-month" type="month" value={month} onChange={event=>setMonth(event.target.value)} /></label><button type="button" className="delete-month-button" disabled={loading || records.length === 0} onClick={()=>{setDeletePassword("");setDeleteError("");setDeleteOpen(true);}}><Trash2 size={15}/>この月を削除</button></div>
+          <div className="month-actions"><label className="month-picker" htmlFor="ledger-month"><span>確認する月</span><Input id="ledger-month" type="month" value={month} onChange={event=>setMonth(event.target.value)} /></label><button type="button" className="delete-month-button" disabled={loading} onClick={()=>{setDeletePassword("");setDeleteError("");setDeleteOpen(true);}}><Trash2 size={15}/>この月を削除</button></div>
           <div className="ledger-toolbar"><label className="search-box"><Search size={17}/><Input aria-label="担当者・用途で検索" value={search} onChange={e=>setSearch(e.target.value)} placeholder="担当者・用途で検索"/></label><Select value={filter} onValueChange={setFilter}><SelectTrigger aria-label="確認状態で絞り込み" className="filter-select"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="all">すべて</SelectItem><SelectItem value="pending">確認待ち</SelectItem><SelectItem value="confirmed">確認済み</SelectItem></SelectContent></Select></div>
           {loadError && <div className="list-error" role="alert">{loadError}<button type="button" onClick={()=>loadRecords(month, store)}>再読み込み</button></div>}
-          {loading ? <p className="loading-state">記録を読み込み中…</p> : visible.length === 0 ? <div className="empty-state"><span className="empty-icon"><FileImage size={30}/></span><h3>{records.length ? "該当する記録がありません" : "まだ記録がありません"}</h3><p>{records.length ? "検索条件を変えてください。" : "左のフォームから最初のレシートを登録してください。"}</p></div> : <Table className="records-table"><TableHeader><TableRow><TableHead>日付・区分</TableHead><TableHead>担当者・用途</TableHead><TableHead>玉数/枚数</TableHead><TableHead>確認</TableHead></TableRow></TableHeader><TableBody>{visible.map(row=><TableRow key={row.id} className="record-row" onClick={()=>{setSelected(row);setDetailError("");setManagerName("");setHasInk(false);}}><TableCell><strong>{row.record_date}</strong><small>{row.kind==="hold"?"保留券":"手入力"} · {row.rate}</small></TableCell><TableCell><strong>{row.person_name}</strong><small className="truncate-purpose">{row.purpose}</small></TableCell><TableCell><strong>{row.amount.toLocaleString()}{row.unit}</strong></TableCell><TableCell><span className={row.confirmed_at?"confirmed-pill":"pending-pill"}>{row.confirmed_at?"確認済み":"確認待ち"}</span></TableCell></TableRow>)}</TableBody></Table>}
+          {loading ? <p className="loading-state">記録を読み込み中…</p> : visible.length === 0 ? <div className="empty-state"><span className="empty-icon"><FileImage size={30}/></span><h3>{records.length ? "該当する記録がありません" : "まだ記録がありません"}</h3><p>{records.length ? "検索条件を変えてください。" : "左のフォームから最初のレシートを登録してください。"}</p></div> : <Table className="records-table"><TableHeader><TableRow><TableHead>日付・区分</TableHead><TableHead>担当者・用途</TableHead><TableHead>玉数/枚数</TableHead><TableHead>確認</TableHead></TableRow></TableHeader><TableBody>{visible.map(row=><TableRow key={row.id} className="record-row" onClick={()=>openRecord(row)}><TableCell><strong>{row.record_date}</strong><small>{row.kind==="hold"?"保留券":"手入力"} · {row.rate}</small></TableCell><TableCell><strong>{row.person_name}</strong><small className="truncate-purpose">{row.purpose}</small></TableCell><TableCell><strong>{row.amount.toLocaleString()}{row.unit}</strong></TableCell><TableCell><span className={row.confirmed_at?"confirmed-pill":"pending-pill"}>{row.confirmed_at?"確認済み":"確認待ち"}</span></TableCell></TableRow>)}</TableBody></Table>}
         </section>
       </div>
+      </> : <section className="month-end-screen" aria-labelledby="month-end-heading">
+        <div className="page-heading month-end-heading"><div><p className="eyebrow">{store} · 月末確認</p><h1 id="month-end-heading">月末ホールコン記録</h1><p className="page-intro">月末の画面写真と、その月の保留券・手入力を確認できます。</p></div></div>
+        <div className="month-end-topline"><label htmlFor="month-end-month">確認する月<Input id="month-end-month" type="month" value={month} onChange={event=>{setMonth(event.target.value);setMonthPhotoFile(null);setMonthPhotoSuccess("");setMonthPhotoError("");}}/></label><div><small>月末最終日</small><strong>{monthEndDate(month)}</strong></div></div>
+        <div className="month-end-columns">
+          <section className="month-end-photo-card" aria-labelledby="month-photo-heading">
+            <h2 id="month-photo-heading">月末のホールコン写真</h2>
+            <p>最終日のホールコン画面を撮影して保存してください。</p>
+            {monthPhotoLoading ? <p className="loading-state">写真を読み込み中…</p> : monthPhoto ? <div className="month-end-photo-preview"><img key={monthPhotoVersion} src={`/api/month-end/photo?store=${encodeURIComponent(store)}&month=${encodeURIComponent(month)}&v=${monthPhotoVersion}`} alt={`${store} ${month}の月末ホールコン写真`}/><small>保存日時：{new Date(monthPhoto.uploaded_at).toLocaleString("ja-JP")}</small></div> : <div className="month-end-photo-empty"><FileImage size={30}/><span>写真はまだありません</span></div>}
+            <form onSubmit={saveMonthPhoto}><label className="upload-zone hallcon-upload" htmlFor="month-end-photo"><UploadCloud size={25}/><span>{monthPhotoFile ? monthPhotoFile.name : "写真を撮影・選択"}</span><small>JPG・PNG・WEBP、10MBまで</small></label><input key={monthPhotoInputKey} id="month-end-photo" className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={event=>setMonthPhotoFile(event.target.files?.[0]??null)}/>{monthPhotoError && <p className="form-alert error" role="alert">{monthPhotoError}</p>}{monthPhotoSuccess && <p className="form-alert success" role="status">{monthPhotoSuccess}</p>}<button type="submit" className="submit-button" disabled={!monthPhotoFile || savingMonthPhoto}>{savingMonthPhoto ? "保存中…" : monthPhoto ? "写真を撮り直して保存" : "月末写真を保存"}</button></form>
+          </section>
+          <section className="month-end-list-card" aria-labelledby="month-records-heading">
+            <div className="ledger-heading"><h2 id="month-records-heading">当月のデータ一覧</h2><span className="total-pill">{records.length} 件</span></div>
+            <div className="month-end-counts"><span>保留券 <strong>{records.filter(row=>row.kind==="hold").length}件</strong></span><span>手入力 <strong>{records.filter(row=>row.kind==="manual").length}件</strong></span></div>
+            {loadError && <div className="list-error" role="alert">{loadError}<button type="button" onClick={()=>loadRecords(month,store)}>再読み込み</button></div>}
+            {loading ? <p className="loading-state">記録を読み込み中…</p> : records.length === 0 ? <div className="month-end-list-empty">この月の記録はありません。</div> : <div className="month-end-records">{records.map(row=><button type="button" className="month-end-record" key={row.id} onClick={()=>openRecord(row)}><span className="month-end-record-top"><time>{row.record_date}</time><span className={row.confirmed_at?"confirmed-pill":"pending-pill"}>{row.confirmed_at?"確認済み":"確認待ち"}</span></span><span className="month-end-record-kind">{row.kind==="hold"?"保留券":"手入力"} · {row.rate}</span><span className="month-end-record-main"><strong>{row.person_name}</strong><strong>{row.amount.toLocaleString()}{row.unit}</strong></span><span className="month-end-record-purpose">{row.purpose}</span></button>)}</div>}
+          </section>
+        </div>
+      </section>}
     </div>
     <Dialog open={!!selected} onOpenChange={closeDetail}>
       <DialogContent className="detail-dialog">
@@ -347,7 +425,7 @@ export default function Home() {
       </DialogContent>
     </Dialog>
     <Dialog open={deleteOpen} onOpenChange={open=>{setDeleteOpen(open);if(!open){setDeletePassword("");setDeleteError("");}}}>
-      <DialogContent className="delete-dialog"><DialogHeader><DialogTitle>この月の記録を削除</DialogTitle><DialogDescription>{store}の{Number(month.slice(0,4))}年{Number(month.slice(5,7))}月の記録をすべて削除します。</DialogDescription></DialogHeader><div className="delete-warning"><Trash2 size={20}/><p>レシート・ホールコン画像・店舗責任者サインも削除され、元に戻せません。</p></div><label htmlFor="delete-password">削除パスワード</label><Input id="delete-password" type="password" value={deletePassword} onChange={event=>setDeletePassword(event.target.value)} autoComplete="off" placeholder="パスワードを入力"/>{deleteError && <p className="form-alert error" role="alert">{deleteError}</p>}<button type="button" className="confirm-delete-button" disabled={deleting || !deletePassword} onClick={deleteMonthRecords}>{deleting?"削除中…":"この月の記録を削除する"}</button></DialogContent>
+      <DialogContent className="delete-dialog"><DialogHeader><DialogTitle>この月の記録を削除</DialogTitle><DialogDescription>{store}の{Number(month.slice(0,4))}年{Number(month.slice(5,7))}月の記録をすべて削除します。</DialogDescription></DialogHeader><div className="delete-warning"><Trash2 size={20}/><p>レシート・ホールコン画像・月末のホールコン写真・店舗責任者サインも削除され、元に戻せません。</p></div><label htmlFor="delete-password">削除パスワード</label><Input id="delete-password" type="password" value={deletePassword} onChange={event=>setDeletePassword(event.target.value)} autoComplete="off" placeholder="パスワードを入力"/>{deleteError && <p className="form-alert error" role="alert">{deleteError}</p>}<button type="button" className="confirm-delete-button" disabled={deleting || !deletePassword} onClick={deleteMonthRecords}>{deleting?"削除中…":"この月の記録を削除する"}</button></DialogContent>
     </Dialog>
   </main>;
 }

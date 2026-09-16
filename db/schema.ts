@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const records = sqliteTable("records", {
   id: text("id").primaryKey(),
@@ -24,3 +24,12 @@ export const records = sqliteTable("records", {
   index("idx_records_record_date").on(table.recordDate),
   index("idx_records_store_date").on(table.store, table.recordDate),
 ]);
+
+export const monthEndPhotos = sqliteTable("month_end_photos", {
+  store: text("store").notNull(),
+  month: text("month").notNull(),
+  photoKey: text("photo_key").notNull(),
+  photoType: text("photo_type").notNull(),
+  photoName: text("photo_name").notNull(),
+  uploadedAt: text("uploaded_at").notNull(),
+}, table => [primaryKey({ columns: [table.store, table.month] })]);

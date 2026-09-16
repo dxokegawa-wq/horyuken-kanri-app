@@ -28,7 +28,7 @@ export async function GET(request: Request) {
     const startDate = `${month}-01`;
     const endDate = new Date(Date.UTC(year, monthNumber, 1)).toISOString().slice(0, 10);
     const result = await db().prepare(
-      "SELECT * FROM records WHERE store = ? AND record_date >= ? AND record_date < ? ORDER BY record_date DESC, created_at DESC LIMIT 500"
+      "SELECT * FROM records WHERE store = ? AND record_date >= ? AND record_date < ? ORDER BY record_date DESC, created_at DESC"
     ).bind(store, startDate, endDate).all<RecordRow>();
     return Response.json({ records: (result.results ?? []).map(publicRecord) });
   } catch (error) {
@@ -104,10 +104,14 @@ export async function DELETE(request: Request) {
     const rows = await db().prepare(
       "SELECT receipt_key, hallcon_key, signature_key FROM records WHERE store = ? AND record_date >= ? AND record_date < ?"
     ).bind(store, startDate, endDate).all<{ receipt_key: string; hallcon_key: string | null; signature_key: string | null }>();
-    const result = await db().prepare(
-      "DELETE FROM records WHERE store = ? AND record_date >= ? AND record_date < ?"
-    ).bind(store, startDate, endDate).run();
-    const keys = (rows.results ?? []).flatMap(row => [row.receipt_key, row.hallcon_key, row.signature_key]).filter((key): key is string => !!key);
+    const monthEnd = await db().prepare("SELECT photo_key FROM month_end_photos WHERE store = ? AND month = ?")
+      .bind(store, month).first<{ photo_key: string }>();
+    const [result] = await db().batch([
+      db().prepare("DELETE FROM records WHERE store = ? AND record_date >= ? AND record_date < ?").bind(store, startDate, endDate),
+      db().prepare("DELETE FROM month_end_photos WHERE store = ? AND month = ?").bind(store, month),
+    ]);
+    const keys = [...(rows.results ?? []).flatMap(row => [row.receipt_key, row.hallcon_key, row.signature_key]), monthEnd?.photo_key]
+      .filter((key): key is string => !!key);
     await Promise.allSettled(keys.map(key => bucket().delete(key)));
     return Response.json({ deleted: result.meta.changes ?? 0 });
   } catch (error) {
