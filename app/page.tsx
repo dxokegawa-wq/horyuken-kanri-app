@@ -12,8 +12,8 @@ type RecordItem = {
   id: string; kind: "hold" | "manual"; rate: string; record_date: string;
   store: string;
   person_name: string; amount: number; unit: "玉" | "枚"; purpose: string;
-  receipt_name: string; created_at: string; confirmed_by: string | null;
-  confirmed_at: string | null; has_signature: boolean;
+  receipt_name: string; hallcon_name: string | null; created_at: string; confirmed_by: string | null;
+  confirmed_at: string | null; has_hallcon: boolean; has_signature: boolean;
 };
 type PageModelContext = {
   registerTool: (tool: {
@@ -37,6 +37,30 @@ const rates = [
 const stores = ["岩槻本店", "桶川店", "平塚店", "ふじみ野店", "美女木店", "鶴瀬店"] as const;
 type Store = typeof stores[number];
 
+async function optimizeImage(file: File) {
+  const bitmap = await createImageBitmap(file);
+  const maxSide = 1600;
+  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("画像を処理できませんでした。");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  let quality = 0.86;
+  let blob: Blob | null = null;
+  do {
+    blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", quality));
+    quality -= 0.08;
+  } while (blob && blob.size > 450 * 1024 && quality >= 0.54);
+  if (!blob) throw new Error("画像を処理できませんでした。");
+  const baseName = file.name.replace(/\.[^.]+$/, "") || "image";
+  return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
+}
+
 export default function Home() {
   const [store, setStore] = useState<Store | null>(null);
   const [records, setRecords] = useState<RecordItem[]>([]);
@@ -53,6 +77,8 @@ export default function Home() {
   const [purpose, setPurpose] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [fileKey, setFileKey] = useState(0);
+  const [hallconFile, setHallconFile] = useState<File | null>(null);
+  const [hallconFileKey, setHallconFileKey] = useState(0);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [month, setMonth] = useState(currentMonth);
@@ -91,7 +117,7 @@ export default function Home() {
       void Promise.resolve(context.registerTool({
         name: "stage_record_details",
         title: "記録内容を入力",
-        description: "保留券または手入力の記録内容をフォームに入力します。保存には画面でレシート画像を添付してください。",
+        description: "保留券または手入力の記録内容をフォームに入力します。保存には画面でレシート画像とホールコン画像を添付してください。",
         inputSchema: {
           type: "object", properties: {
             kind: { type: "string", enum: ["hold", "manual"] },
@@ -115,7 +141,7 @@ export default function Home() {
             typeof value.purpose !== "string" || !value.purpose.trim() || value.purpose.length > 1000) throw new Error("入力内容を確認してください。");
           setKind(value.kind); setRate(value.rate); setDate(value.date); setName(value.name);
           setAmount(String(value.amount)); setPurpose(value.purpose);
-          return { staged: true, needs_receipt_image: true };
+          return { staged: true, needs_receipt_image: true, needs_hallcon_image: true };
         }
       }, { signal: lifecycle.signal })).catch(error => console.error("WebMCP registration failed", error));
     } catch (error) { console.error("WebMCP registration failed", error); }
@@ -131,13 +157,16 @@ export default function Home() {
     event.preventDefault(); setError(""); setSuccess("");
     if (!store) { setError("店舗を選択してください。"); return; }
     if (!file) { setError("レシート画像を選択してください。"); return; }
+    if (!hallconFile) { setError("ホールコン画像を選択してください。"); return; }
     if (file.size > 10 * 1024 * 1024) { setError("画像は10MB以内にしてください。"); return; }
-    const body = new FormData();
-    body.set("receipt", file); body.set("store", store); body.set("kind", kind); body.set("rate", rate);
-    body.set("record_date", date); body.set("person_name", name); body.set("amount", amount);
-    body.set("purpose", purpose);
+    if (hallconFile.size > 10 * 1024 * 1024) { setError("ホールコン画像は10MB以内にしてください。"); return; }
     setSaving(true);
     try {
+      const [receiptUpload, hallconUpload] = await Promise.all([optimizeImage(file), optimizeImage(hallconFile)]);
+      const body = new FormData();
+      body.set("receipt", receiptUpload); body.set("hallcon", hallconUpload); body.set("store", store); body.set("kind", kind); body.set("rate", rate);
+      body.set("record_date", date); body.set("person_name", name); body.set("amount", amount);
+      body.set("purpose", purpose);
       const response = await fetch("/api/records", { method: "POST", body });
       const data = await response.json() as { record: RecordItem; error?: string };
       if (!response.ok) throw new Error(data.error || "保存できませんでした。");
@@ -145,6 +174,7 @@ export default function Home() {
       if (savedMonth === month) setRecords(current => [data.record, ...current]);
       else setMonth(savedMonth);
       setName(""); setAmount(""); setPurpose(""); setFile(null); setFileKey(value => value + 1);
+      setHallconFile(null); setHallconFileKey(value => value + 1);
       setSuccess("記録を保存しました。店長確認は一覧から行えます。");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "保存できませんでした。");
@@ -220,6 +250,7 @@ export default function Home() {
           <div className="card-heading"><span className="card-icon"><Plus size={19}/></span><div><h2 id="entry-heading">登録内容</h2><p>入力した内容は台帳に保存されます</p></div></div>
           <form className="entry-form" onSubmit={saveRecord}>
             <div className="field full"><label htmlFor="receipt">レシート画像 <em>必須</em></label><label className="upload-zone" htmlFor="receipt"><UploadCloud size={27}/><span>{file ? file.name : "画像を選択・撮影"}</span><small>JPG・PNG・WEBP、10MBまで</small></label><input key={fileKey} id="receipt" className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={e=>setFile(e.target.files?.[0]??null)}/></div>
+            <div className="field full"><label htmlFor="hallcon">ホールコン画像 <em>必須</em></label><label className="upload-zone hallcon-upload" htmlFor="hallcon"><FileImage size={27}/><span>{hallconFile ? hallconFile.name : "ホールコン画面を撮影・選択"}</span><small>レシート内容との照合に使用します</small></label><input key={hallconFileKey} id="hallcon" className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={e=>setHallconFile(e.target.files?.[0]??null)}/></div>
             <div className="field full"><span className="field-label">区分 <em>必須</em></span><div className="segmented" role="group" aria-label="区分"><button type="button" className={kind==="hold"?"active":""} aria-pressed={kind==="hold"} onClick={()=>setKind("hold")}>保留券</button><button type="button" className={kind==="manual"?"active":""} aria-pressed={kind==="manual"} onClick={()=>setKind("manual")}>手入力</button></div></div>
             <div className="field"><label htmlFor="rate">レート <em>必須</em></label><Select value={rate} onValueChange={setRate}><SelectTrigger id="rate" className="wide-select"><SelectValue placeholder="選択してください"/></SelectTrigger><SelectContent>{rates.map(value=><SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></div>
             <div className="field"><label htmlFor="date">日付 <em>必須</em></label><Input id="date" type="date" value={date} onChange={e=>setDate(e.target.value)} required/></div>
@@ -240,6 +271,6 @@ export default function Home() {
         </section>
       </div>
     </div>
-    <Dialog open={!!selected} onOpenChange={closeDetail}><DialogContent className="detail-dialog"><DialogHeader><DialogTitle>記録の詳細</DialogTitle><DialogDescription>{selected?.store} · {selected?.record_date} · {selected?.kind==="hold"?"保留券":"手入力"}</DialogDescription></DialogHeader>{selected && <div className="detail-content"><div className="detail-grid"><div><small>レート</small><strong>{selected.rate}</strong></div><div><small>担当者</small><strong>{selected.person_name}</strong></div><div><small>玉数・枚数</small><strong>{selected.amount.toLocaleString()}{selected.unit}</strong></div><div><small>用途</small><strong>{selected.purpose}</strong></div></div><div className="receipt-panel"><span>レシート画像</span><img src={`/api/records/${selected.id}/receipt`} alt="添付されたレシート"/></div>{selected.confirmed_at ? <div className="signed-panel"><strong>店長確認済み</strong><span>{selected.confirmed_by} · {new Date(selected.confirmed_at).toLocaleString("ja-JP")}</span>{selected.has_signature && <img src={`/api/records/${selected.id}/signature`} alt="店長確認サイン"/>}</div> : <div className="sign-form"><h3>店長確認サイン</h3><p>店長本人が名前とサインを記入してください。</p><label htmlFor="manager-name">店長名</label><Input id="manager-name" value={managerName} onChange={e=>setManagerName(e.target.value)} maxLength={100} placeholder="店長名を入力"/><div className="signature-label"><span>サイン</span><button type="button" className="clear-signature" onClick={clearSignature} disabled={!hasInk}>クリア</button></div><canvas ref={canvasRef} width={600} height={160} className="signature-canvas" aria-label="店長確認サイン記入欄" onPointerDown={beginDraw} onPointerMove={moveDraw} onPointerUp={endDraw} onPointerCancel={endDraw}/>{detailError && <p className="form-alert error" role="alert">{detailError}</p>}<button type="button" className="submit-button" onClick={confirmRecord} disabled={confirming}>{confirming?"保存中…":"店長確認を保存"}</button></div>}</div>}</DialogContent></Dialog>
+    <Dialog open={!!selected} onOpenChange={closeDetail}><DialogContent className="detail-dialog"><DialogHeader><DialogTitle>記録の詳細</DialogTitle><DialogDescription>{selected?.store} · {selected?.record_date} · {selected?.kind==="hold"?"保留券":"手入力"}</DialogDescription></DialogHeader>{selected && <div className="detail-content"><div className="detail-grid"><div><small>レート</small><strong>{selected.rate}</strong></div><div><small>担当者</small><strong>{selected.person_name}</strong></div><div><small>玉数・枚数</small><strong>{selected.amount.toLocaleString()}{selected.unit}</strong></div><div><small>用途</small><strong>{selected.purpose}</strong></div></div><div className="receipt-panel"><span>レシート画像</span><img src={`/api/records/${selected.id}/receipt`} alt="添付されたレシート"/></div><div className="receipt-panel hallcon-panel"><span>ホールコン画像</span>{selected.has_hallcon ? <img src={`/api/records/${selected.id}/hallcon`} alt="添付されたホールコン画面"/> : <div className="missing-image">既存記録のため画像はありません</div>}</div>{selected.confirmed_at ? <div className="signed-panel"><strong>店長確認済み</strong><span>{selected.confirmed_by} · {new Date(selected.confirmed_at).toLocaleString("ja-JP")}</span>{selected.has_signature && <img src={`/api/records/${selected.id}/signature`} alt="店長確認サイン"/>}</div> : <div className="sign-form"><h3>店長確認サイン</h3><p>店長本人が名前とサインを記入してください。</p><label htmlFor="manager-name">店長名</label><Input id="manager-name" value={managerName} onChange={e=>setManagerName(e.target.value)} maxLength={100} placeholder="店長名を入力"/><div className="signature-label"><span>サイン</span><button type="button" className="clear-signature" onClick={clearSignature} disabled={!hasInk}>クリア</button></div><canvas ref={canvasRef} width={600} height={160} className="signature-canvas" aria-label="店長確認サイン記入欄" onPointerDown={beginDraw} onPointerMove={moveDraw} onPointerUp={endDraw} onPointerCancel={endDraw}/>{detailError && <p className="form-alert error" role="alert">{detailError}</p>}<button type="button" className="submit-button" onClick={confirmRecord} disabled={confirming}>{confirming?"保存中…":"店長確認を保存"}</button></div>}</div>}</DialogContent></Dialog>
   </main>;
 }

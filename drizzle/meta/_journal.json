@@ -15,6 +15,13 @@
       "when": 1789526400000,
       "tag": "0001_store_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789527600000,
+      "tag": "0002_add_hallcon_image",
+      "breakpoints": true
     }
   ]
 }
