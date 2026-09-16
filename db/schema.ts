@@ -2,6 +2,7 @@ import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const records = sqliteTable("records", {
   id: text("id").primaryKey(),
+  store: text("store").notNull().default("桶川店"),
   kind: text("kind").notNull(),
   rate: text("rate").notNull(),
   recordDate: text("record_date").notNull(),
@@ -16,4 +17,7 @@ export const records = sqliteTable("records", {
   confirmedBy: text("confirmed_by"),
   confirmedAt: text("confirmed_at"),
   signatureKey: text("signature_key"),
-}, table => [index("idx_records_record_date").on(table.recordDate)]);
+}, table => [
+  index("idx_records_record_date").on(table.recordDate),
+  index("idx_records_store_date").on(table.store, table.recordDate),
+]);

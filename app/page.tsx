@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent } from "react";
-import { ClipboardCheck, FileImage, Plus, Search, Ticket, UploadCloud } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent } from "react";
+import { Building2, ClipboardCheck, FileImage, MapPin, Plus, Search, Ticket, UploadCloud } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 
 type RecordItem = {
   id: string; kind: "hold" | "manual"; rate: string; record_date: string;
+  store: string;
   person_name: string; amount: number; unit: "玉" | "枚"; purpose: string;
   receipt_name: string; created_at: string; confirmed_by: string | null;
   confirmed_at: string | null; has_signature: boolean;
@@ -33,10 +34,13 @@ const rates = [
   "5円スロット",
   "2円スロット",
 ];
+const stores = ["岩槻本店", "桶川店", "平塚店", "ふじみ野店", "美女木店", "鶴瀬店"] as const;
+type Store = typeof stores[number];
 
 export default function Home() {
+  const [store, setStore] = useState<Store | null>(null);
   const [records, setRecords] = useState<RecordItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -60,11 +64,11 @@ export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
 
-  async function loadRecords(selectedMonth = month) {
+  const loadRecords = useCallback(async (selectedMonth: string, selectedStore: Store) => {
     setLoadError("");
     setLoading(true);
     try {
-      const response = await fetch(`/api/records?month=${encodeURIComponent(selectedMonth)}`, { cache: "no-store" });
+      const response = await fetch(`/api/records?month=${encodeURIComponent(selectedMonth)}&store=${encodeURIComponent(selectedStore)}`, { cache: "no-store" });
       const data = await response.json() as { records: RecordItem[]; error?: string };
       if (!response.ok) throw new Error(data.error || "記録を読み込めませんでした。");
       setRecords(data.records);
@@ -73,8 +77,12 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }
-  useEffect(() => { void loadRecords(month); }, [month]);
+  }, []);
+  useEffect(() => {
+    if (!store) return;
+    const timer = window.setTimeout(() => void loadRecords(month, store), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadRecords, month, store]);
   useEffect(() => {
     const context = (document as Document & { modelContext?: PageModelContext }).modelContext;
     if (!context?.registerTool) return;
@@ -121,10 +129,11 @@ export default function Home() {
 
   async function saveRecord(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError(""); setSuccess("");
+    if (!store) { setError("店舗を選択してください。"); return; }
     if (!file) { setError("レシート画像を選択してください。"); return; }
     if (file.size > 10 * 1024 * 1024) { setError("画像は10MB以内にしてください。"); return; }
     const body = new FormData();
-    body.set("receipt", file); body.set("kind", kind); body.set("rate", rate);
+    body.set("receipt", file); body.set("store", store); body.set("kind", kind); body.set("rate", rate);
     body.set("record_date", date); body.set("person_name", name); body.set("amount", amount);
     body.set("purpose", purpose);
     setSaving(true);
@@ -188,8 +197,22 @@ export default function Home() {
     } finally { setConfirming(false); }
   }
 
+  function chooseStore(value: Store) {
+    setStore(value); setRecords([]); setSearch(""); setFilter("all"); setLoadError(""); setSuccess(""); setError("");
+  }
+
+  if (!store) return <main className="store-select-screen">
+    <section className="store-select-card" aria-labelledby="store-select-heading">
+      <span className="store-select-icon"><Building2 size={30}/></span>
+      <p className="eyebrow">保留券・手入力管理</p>
+      <h1 id="store-select-heading">店舗を選択してください</h1>
+      <p className="store-select-intro">記録を登録・確認する店舗を選んでください。</p>
+      <div className="store-grid">{stores.map(value => <button key={value} type="button" onClick={() => chooseStore(value)}><MapPin size={19}/><span>{value}</span><span aria-hidden="true">→</span></button>)}</div>
+    </section>
+  </main>;
+
   return <main className="app-shell">
-    <header className="topbar"><div className="brand"><span className="brand-mark"><Ticket size={20}/></span><div><strong>保留券・手入力管理</strong><small>店舗記録</small></div></div><span className="top-note">レシートと処理内容を一か所に</span></header>
+    <header className="topbar"><div className="brand"><span className="brand-mark"><Ticket size={20}/></span><div><strong>保留券・手入力管理</strong><small>{store}</small></div></div><button type="button" className="change-store" onClick={()=>setStore(null)}><MapPin size={15}/>{store}<span>変更</span></button></header>
     <div className="workspace">
       <div className="page-heading"><div><p className="eyebrow">記録台帳</p><h1>新しい記録を登録</h1><p className="page-intro">レシートを添付し、内容を入力してください。</p></div><span className="date-chip">本日の記録</span></div>
       <div className="columns">
@@ -212,11 +235,11 @@ export default function Home() {
         <section className="ledger-card" aria-labelledby="ledger-heading"><div className="ledger-heading"><div><p className="eyebrow">一覧</p><h2 id="ledger-heading">記録台帳</h2></div><span className="total-pill">{records.length} 件</span></div>
           <label className="month-picker" htmlFor="ledger-month"><span>確認する月</span><Input id="ledger-month" type="month" value={month} onChange={event=>setMonth(event.target.value)} /></label>
           <div className="ledger-toolbar"><label className="search-box"><Search size={17}/><Input aria-label="担当者・用途で検索" value={search} onChange={e=>setSearch(e.target.value)} placeholder="担当者・用途で検索"/></label><Select value={filter} onValueChange={setFilter}><SelectTrigger aria-label="確認状態で絞り込み" className="filter-select"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="all">すべて</SelectItem><SelectItem value="pending">確認待ち</SelectItem><SelectItem value="confirmed">確認済み</SelectItem></SelectContent></Select></div>
-          {loadError && <div className="list-error" role="alert">{loadError}<button type="button" onClick={()=>loadRecords(month)}>再読み込み</button></div>}
+          {loadError && <div className="list-error" role="alert">{loadError}<button type="button" onClick={()=>loadRecords(month, store)}>再読み込み</button></div>}
           {loading ? <p className="loading-state">記録を読み込み中…</p> : visible.length === 0 ? <div className="empty-state"><span className="empty-icon"><FileImage size={30}/></span><h3>{records.length ? "該当する記録がありません" : "まだ記録がありません"}</h3><p>{records.length ? "検索条件を変えてください。" : "左のフォームから最初のレシートを登録してください。"}</p></div> : <Table className="records-table"><TableHeader><TableRow><TableHead>日付・区分</TableHead><TableHead>担当者・用途</TableHead><TableHead>玉数/枚数</TableHead><TableHead>確認</TableHead></TableRow></TableHeader><TableBody>{visible.map(row=><TableRow key={row.id} className="record-row" onClick={()=>{setSelected(row);setDetailError("");setManagerName("");setHasInk(false);}}><TableCell><strong>{row.record_date}</strong><small>{row.kind==="hold"?"保留券":"手入力"} · {row.rate}</small></TableCell><TableCell><strong>{row.person_name}</strong><small className="truncate-purpose">{row.purpose}</small></TableCell><TableCell><strong>{row.amount.toLocaleString()}{row.unit}</strong></TableCell><TableCell><span className={row.confirmed_at?"confirmed-pill":"pending-pill"}>{row.confirmed_at?"確認済み":"確認待ち"}</span></TableCell></TableRow>)}</TableBody></Table>}
         </section>
       </div>
     </div>
-    <Dialog open={!!selected} onOpenChange={closeDetail}><DialogContent className="detail-dialog"><DialogHeader><DialogTitle>記録の詳細</DialogTitle><DialogDescription>{selected?.record_date} · {selected?.kind==="hold"?"保留券":"手入力"}</DialogDescription></DialogHeader>{selected && <div className="detail-content"><div className="detail-grid"><div><small>レート</small><strong>{selected.rate}</strong></div><div><small>担当者</small><strong>{selected.person_name}</strong></div><div><small>玉数・枚数</small><strong>{selected.amount.toLocaleString()}{selected.unit}</strong></div><div><small>用途</small><strong>{selected.purpose}</strong></div></div><div className="receipt-panel"><span>レシート画像</span><img src={`/api/records/${selected.id}/receipt`} alt="添付されたレシート"/></div>{selected.confirmed_at ? <div className="signed-panel"><strong>店長確認済み</strong><span>{selected.confirmed_by} · {new Date(selected.confirmed_at).toLocaleString("ja-JP")}</span>{selected.has_signature && <img src={`/api/records/${selected.id}/signature`} alt="店長確認サイン"/>}</div> : <div className="sign-form"><h3>店長確認サイン</h3><p>店長本人が名前とサインを記入してください。</p><label htmlFor="manager-name">店長名</label><Input id="manager-name" value={managerName} onChange={e=>setManagerName(e.target.value)} maxLength={100} placeholder="店長名を入力"/><div className="signature-label"><span>サイン</span><button type="button" onClick={clearSignature}>書き直す</button></div><canvas ref={canvasRef} width={600} height={160} className="signature-canvas" aria-label="店長確認サイン記入欄" onPointerDown={beginDraw} onPointerMove={moveDraw} onPointerUp={endDraw} onPointerCancel={endDraw}/>{detailError && <p className="form-alert error" role="alert">{detailError}</p>}<button type="button" className="submit-button" onClick={confirmRecord} disabled={confirming}>{confirming?"保存中…":"店長確認を保存"}</button></div>}</div>}</DialogContent></Dialog>
+    <Dialog open={!!selected} onOpenChange={closeDetail}><DialogContent className="detail-dialog"><DialogHeader><DialogTitle>記録の詳細</DialogTitle><DialogDescription>{selected?.store} · {selected?.record_date} · {selected?.kind==="hold"?"保留券":"手入力"}</DialogDescription></DialogHeader>{selected && <div className="detail-content"><div className="detail-grid"><div><small>レート</small><strong>{selected.rate}</strong></div><div><small>担当者</small><strong>{selected.person_name}</strong></div><div><small>玉数・枚数</small><strong>{selected.amount.toLocaleString()}{selected.unit}</strong></div><div><small>用途</small><strong>{selected.purpose}</strong></div></div><div className="receipt-panel"><span>レシート画像</span><img src={`/api/records/${selected.id}/receipt`} alt="添付されたレシート"/></div>{selected.confirmed_at ? <div className="signed-panel"><strong>店長確認済み</strong><span>{selected.confirmed_by} · {new Date(selected.confirmed_at).toLocaleString("ja-JP")}</span>{selected.has_signature && <img src={`/api/records/${selected.id}/signature`} alt="店長確認サイン"/>}</div> : <div className="sign-form"><h3>店長確認サイン</h3><p>店長本人が名前とサインを記入してください。</p><label htmlFor="manager-name">店長名</label><Input id="manager-name" value={managerName} onChange={e=>setManagerName(e.target.value)} maxLength={100} placeholder="店長名を入力"/><div className="signature-label"><span>サイン</span><button type="button" className="clear-signature" onClick={clearSignature} disabled={!hasInk}>クリア</button></div><canvas ref={canvasRef} width={600} height={160} className="signature-canvas" aria-label="店長確認サイン記入欄" onPointerDown={beginDraw} onPointerMove={moveDraw} onPointerUp={endDraw} onPointerCancel={endDraw}/>{detailError && <p className="form-alert error" role="alert">{detailError}</p>}<button type="button" className="submit-button" onClick={confirmRecord} disabled={confirming}>{confirming?"保存中…":"店長確認を保存"}</button></div>}</div>}</DialogContent></Dialog>
   </main>;
 }

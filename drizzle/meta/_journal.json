@@ -8,6 +8,13 @@
       "when": 1789367660696,
       "tag": "0000_ambitious_galactus",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1789526400000,
+      "tag": "0001_store_scope",
+      "breakpoints": true
     }
   ]
 }
