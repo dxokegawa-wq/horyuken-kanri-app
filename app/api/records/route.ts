@@ -1,7 +1,7 @@
 import { bucket, db, publicRecord, type RecordRow } from "@/lib/records";
 
 export const runtime = "edge";
-const rates = new Set(["4円パチンコ", "1円パチンコ", "20円スロット", "5円スロット"]);
+const rates = new Set(["4円パチンコ", "1円パチンコ", "0.5円パチンコ", "20円スロット", "10円スロット", "5円スロット", "2円スロット"]);
 const imageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 function fail(message: string, status = 400) {
@@ -41,7 +41,7 @@ export async function POST(request: Request) {
     if (kind !== "hold" && kind !== "manual") return fail("区分を選択してください。");
     if (!rates.has(rate)) return fail("レートを選択してください。");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(recordDate) || Number.isNaN(Date.parse(recordDate))) return fail("日付を入力してください。");
-    if (!personName || personName.length > 100) return fail("名前を100文字以内で入力してください。");
+    if (!personName || personName.length > 100) return fail("担当者名を100文字以内で入力してください。");
     if (!Number.isSafeInteger(amount) || amount < 1 || amount > 100000000) return fail("玉数・枚数を正しく入力してください。");
     if (!purpose || purpose.length > 1000) return fail("用途を1000文字以内で入力してください。");
     const id = crypto.randomUUID();
