@@ -1,4 +1,4 @@
-import { bucket, db, publicRecord, type RecordRow } from "@/lib/records";
+import { adminPassword, bucket, db, publicRecord, type RecordRow } from "@/lib/records";
 
 export const runtime = "edge";
 const rates = new Set(["4円パチンコ", "1円パチンコ", "0.5円パチンコ", "20円スロット", "10円スロット", "5円スロット", "2円スロット"]);
@@ -84,5 +84,34 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("記録の保存に失敗", error);
     return fail("保存できませんでした。入力内容を確認して再試行してください。", 503);
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const configuredPassword = adminPassword();
+    if (!configuredPassword) return fail("削除用パスワードが設定されていません。", 503);
+    const body = await request.json() as { password?: string; month?: string; store?: string };
+    if (body.password !== configuredPassword) return fail("パスワードが違います。", 403);
+    const month = body.month ?? "";
+    const store = body.store ?? "";
+    if (!stores.has(store)) return fail("店舗を選択してください。");
+    if (!/^\d{4}-\d{2}$/.test(month)) return fail("削除する月を選択してください。");
+    const [year, monthNumber] = month.split("-").map(Number);
+    if (monthNumber < 1 || monthNumber > 12) return fail("削除する月を選択してください。");
+    const startDate = `${month}-01`;
+    const endDate = new Date(Date.UTC(year, monthNumber, 1)).toISOString().slice(0, 10);
+    const rows = await db().prepare(
+      "SELECT receipt_key, hallcon_key, signature_key FROM records WHERE store = ? AND record_date >= ? AND record_date < ?"
+    ).bind(store, startDate, endDate).all<{ receipt_key: string; hallcon_key: string | null; signature_key: string | null }>();
+    const result = await db().prepare(
+      "DELETE FROM records WHERE store = ? AND record_date >= ? AND record_date < ?"
+    ).bind(store, startDate, endDate).run();
+    const keys = (rows.results ?? []).flatMap(row => [row.receipt_key, row.hallcon_key, row.signature_key]).filter((key): key is string => !!key);
+    await Promise.allSettled(keys.map(key => bucket().delete(key)));
+    return Response.json({ deleted: result.meta.changes ?? 0 });
+  } catch (error) {
+    console.error("月別記録の削除に失敗", error);
+    return fail("削除できませんでした。時間をおいて再試行してください。", 503);
   }
 }

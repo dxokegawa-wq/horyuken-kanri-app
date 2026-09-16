@@ -18,6 +18,9 @@ export function bucket() {
   if (!env.BUCKET) throw new Error("画像保存先を利用できません");
   return env.BUCKET;
 }
+export function adminPassword() {
+  return env.ADMIN_PASSWORD;
+}
 export function publicRecord(row: RecordRow) {
   const { receipt_key, hallcon_key, signature_key, ...safe } = row;
   return { ...safe, has_hallcon: !!hallcon_key, has_signature: !!signature_key };

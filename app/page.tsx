@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent } from "react";
-import { Building2, ClipboardCheck, FileImage, MapPin, Plus, Search, Ticket, UploadCloud } from "lucide-react";
+import { Building2, ClipboardCheck, FileImage, MapPin, Pencil, Plus, Search, Ticket, Trash2, UploadCloud } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -83,6 +83,18 @@ export default function Home() {
   const [filter, setFilter] = useState("all");
   const [month, setMonth] = useState(currentMonth);
   const [selected, setSelected] = useState<RecordItem | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [editKind, setEditKind] = useState<"hold" | "manual">("hold");
+  const [editRate, setEditRate] = useState(rates[0]);
+  const [editDate, setEditDate] = useState("");
+  const [editName, setEditName] = useState("");
+  const [editAmount, setEditAmount] = useState("");
+  const [editPurpose, setEditPurpose] = useState("");
+  const [editingSave, setEditingSave] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteError, setDeleteError] = useState("");
+  const [deleting, setDeleting] = useState(false);
   const [managerName, setManagerName] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [detailError, setDetailError] = useState("");
@@ -182,7 +194,7 @@ export default function Home() {
   }
 
   function closeDetail(open: boolean) {
-    if (!open) { setSelected(null); setDetailError(""); setManagerName(""); setHasInk(false); }
+    if (!open) { setSelected(null); setEditing(false); setDetailError(""); setManagerName(""); setHasInk(false); }
   }
   function clearSignature() {
     const canvas = canvasRef.current;
@@ -227,6 +239,48 @@ export default function Home() {
     } finally { setConfirming(false); }
   }
 
+  function startEditingRecord(record: RecordItem) {
+    setEditKind(record.kind); setEditRate(record.rate); setEditDate(record.record_date);
+    setEditName(record.person_name); setEditAmount(String(record.amount)); setEditPurpose(record.purpose);
+    setDetailError(""); setEditing(true);
+  }
+
+  async function saveEditedRecord(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selected) return;
+    setDetailError(""); setEditingSave(true);
+    try {
+      const response = await fetch(`/api/records/${selected.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: editKind, rate: editRate, record_date: editDate, person_name: editName, amount: Number(editAmount), purpose: editPurpose })
+      });
+      const data = await response.json() as { record: RecordItem; error?: string };
+      if (!response.ok) throw new Error(data.error || "修正できませんでした。");
+      setRecords(current => current.map(row => row.id === data.record.id ? data.record : row));
+      setSelected(data.record); setEditing(false); setSuccess("記録を修正しました。");
+      if (data.record.record_date.slice(0, 7) !== month) setMonth(data.record.record_date.slice(0, 7));
+    } catch (caught) {
+      setDetailError(caught instanceof Error ? caught.message : "修正できませんでした。");
+    } finally { setEditingSave(false); }
+  }
+
+  async function deleteMonthRecords() {
+    if (!store) return;
+    setDeleteError(""); setDeleting(true);
+    try {
+      const response = await fetch("/api/records", {
+        method: "DELETE", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ store, month, password: deletePassword })
+      });
+      const data = await response.json() as { deleted?: number; error?: string };
+      if (!response.ok) throw new Error(data.error || "削除できませんでした。");
+      setRecords([]); setDeleteOpen(false); setDeletePassword("");
+      setSuccess(`${data.deleted ?? 0}件の記録を削除しました。`);
+    } catch (caught) {
+      setDeleteError(caught instanceof Error ? caught.message : "削除できませんでした。");
+    } finally { setDeleting(false); }
+  }
+
   function chooseStore(value: Store) {
     setStore(value); setRecords([]); setSearch(""); setFilter("all"); setLoadError(""); setSuccess(""); setError("");
   }
@@ -255,7 +309,7 @@ export default function Home() {
             <div className="field"><label htmlFor="rate">レート <em>必須</em></label><Select value={rate} onValueChange={setRate}><SelectTrigger id="rate" className="wide-select"><SelectValue placeholder="選択してください"/></SelectTrigger><SelectContent>{rates.map(value=><SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></div>
             <div className="field"><label htmlFor="date">日付 <em>必須</em></label><Input id="date" type="date" value={date} onChange={e=>setDate(e.target.value)} required/></div>
             <div className="field"><label htmlFor="name">担当者 <em>必須</em></label><Input id="name" value={name} onChange={e=>setName(e.target.value)} maxLength={100} placeholder="担当者名" required/></div>
-            <div className="field"><label htmlFor="count">玉数・枚数 <em>必須</em></label><div className="count-input"><Input id="count" type="number" min="1" max="100000000" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0" required/><span>{rate.includes("パチンコ") ? "玉" : "枚"}</span></div></div>
+            <div className="field"><label htmlFor="count">玉数・枚数 <em>必須</em></label><Input id="count" type="number" min="1" max="100000000" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0" required/></div>
             <div className="field full"><label htmlFor="purpose">用途・詳細 <em>必須</em></label><Textarea id="purpose" value={purpose} onChange={e=>setPurpose(e.target.value)} maxLength={1000} placeholder="例：前日の保留券対応、台トラブルの補填など" rows={3} required/></div>
             <div className="confirmation-preview"><ClipboardCheck size={19}/><div><strong>店長確認</strong><span>登録後、店長が確認サインを記入できます</span></div><span className="pending-pill">確認待ち</span></div>
             {error && <p className="form-alert error" role="alert">{error}</p>}
@@ -264,13 +318,36 @@ export default function Home() {
           </form>
         </section>
         <section className="ledger-card" aria-labelledby="ledger-heading"><div className="ledger-heading"><div><p className="eyebrow">一覧</p><h2 id="ledger-heading">記録台帳</h2></div><span className="total-pill">{records.length} 件</span></div>
-          <label className="month-picker" htmlFor="ledger-month"><span>確認する月</span><Input id="ledger-month" type="month" value={month} onChange={event=>setMonth(event.target.value)} /></label>
+          <div className="month-actions"><label className="month-picker" htmlFor="ledger-month"><span>確認する月</span><Input id="ledger-month" type="month" value={month} onChange={event=>setMonth(event.target.value)} /></label><button type="button" className="delete-month-button" disabled={loading || records.length === 0} onClick={()=>{setDeletePassword("");setDeleteError("");setDeleteOpen(true);}}><Trash2 size={15}/>この月を削除</button></div>
           <div className="ledger-toolbar"><label className="search-box"><Search size={17}/><Input aria-label="担当者・用途で検索" value={search} onChange={e=>setSearch(e.target.value)} placeholder="担当者・用途で検索"/></label><Select value={filter} onValueChange={setFilter}><SelectTrigger aria-label="確認状態で絞り込み" className="filter-select"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="all">すべて</SelectItem><SelectItem value="pending">確認待ち</SelectItem><SelectItem value="confirmed">確認済み</SelectItem></SelectContent></Select></div>
           {loadError && <div className="list-error" role="alert">{loadError}<button type="button" onClick={()=>loadRecords(month, store)}>再読み込み</button></div>}
           {loading ? <p className="loading-state">記録を読み込み中…</p> : visible.length === 0 ? <div className="empty-state"><span className="empty-icon"><FileImage size={30}/></span><h3>{records.length ? "該当する記録がありません" : "まだ記録がありません"}</h3><p>{records.length ? "検索条件を変えてください。" : "左のフォームから最初のレシートを登録してください。"}</p></div> : <Table className="records-table"><TableHeader><TableRow><TableHead>日付・区分</TableHead><TableHead>担当者・用途</TableHead><TableHead>玉数/枚数</TableHead><TableHead>確認</TableHead></TableRow></TableHeader><TableBody>{visible.map(row=><TableRow key={row.id} className="record-row" onClick={()=>{setSelected(row);setDetailError("");setManagerName("");setHasInk(false);}}><TableCell><strong>{row.record_date}</strong><small>{row.kind==="hold"?"保留券":"手入力"} · {row.rate}</small></TableCell><TableCell><strong>{row.person_name}</strong><small className="truncate-purpose">{row.purpose}</small></TableCell><TableCell><strong>{row.amount.toLocaleString()}{row.unit}</strong></TableCell><TableCell><span className={row.confirmed_at?"confirmed-pill":"pending-pill"}>{row.confirmed_at?"確認済み":"確認待ち"}</span></TableCell></TableRow>)}</TableBody></Table>}
         </section>
       </div>
     </div>
-    <Dialog open={!!selected} onOpenChange={closeDetail}><DialogContent className="detail-dialog"><DialogHeader><DialogTitle>記録の詳細</DialogTitle><DialogDescription>{selected?.store} · {selected?.record_date} · {selected?.kind==="hold"?"保留券":"手入力"}</DialogDescription></DialogHeader>{selected && <div className="detail-content"><div className="detail-grid"><div><small>レート</small><strong>{selected.rate}</strong></div><div><small>担当者</small><strong>{selected.person_name}</strong></div><div><small>玉数・枚数</small><strong>{selected.amount.toLocaleString()}{selected.unit}</strong></div><div><small>用途</small><strong>{selected.purpose}</strong></div></div><div className="receipt-panel"><span>レシート画像</span><img src={`/api/records/${selected.id}/receipt`} alt="添付されたレシート"/></div><div className="receipt-panel hallcon-panel"><span>ホールコン画像</span>{selected.has_hallcon ? <img src={`/api/records/${selected.id}/hallcon`} alt="添付されたホールコン画面"/> : <div className="missing-image">既存記録のため画像はありません</div>}</div>{selected.confirmed_at ? <div className="signed-panel"><strong>店長確認済み</strong><span>{selected.confirmed_by} · {new Date(selected.confirmed_at).toLocaleString("ja-JP")}</span>{selected.has_signature && <img src={`/api/records/${selected.id}/signature`} alt="店長確認サイン"/>}</div> : <div className="sign-form"><h3>店長確認サイン</h3><p>店長本人が名前とサインを記入してください。</p><label htmlFor="manager-name">店長名</label><Input id="manager-name" value={managerName} onChange={e=>setManagerName(e.target.value)} maxLength={100} placeholder="店長名を入力"/><div className="signature-label"><span>サイン</span><button type="button" className="clear-signature" onClick={clearSignature} disabled={!hasInk}>クリア</button></div><canvas ref={canvasRef} width={600} height={160} className="signature-canvas" aria-label="店長確認サイン記入欄" onPointerDown={beginDraw} onPointerMove={moveDraw} onPointerUp={endDraw} onPointerCancel={endDraw}/>{detailError && <p className="form-alert error" role="alert">{detailError}</p>}<button type="button" className="submit-button" onClick={confirmRecord} disabled={confirming}>{confirming?"保存中…":"店長確認を保存"}</button></div>}</div>}</DialogContent></Dialog>
+    <Dialog open={!!selected} onOpenChange={closeDetail}>
+      <DialogContent className="detail-dialog">
+        <DialogHeader><DialogTitle>{editing ? "記録を修正" : "記録の詳細"}</DialogTitle><DialogDescription>{selected?.store} · {selected?.record_date} · {selected?.kind==="hold"?"保留券":"手入力"}</DialogDescription></DialogHeader>
+        {selected && (editing ? <form className="edit-form" onSubmit={saveEditedRecord}>
+          <div className="field full"><span className="field-label">区分</span><div className="segmented"><button type="button" className={editKind==="hold"?"active":""} onClick={()=>setEditKind("hold")}>保留券</button><button type="button" className={editKind==="manual"?"active":""} onClick={()=>setEditKind("manual")}>手入力</button></div></div>
+          <div className="field"><label htmlFor="edit-rate">レート</label><Select value={editRate} onValueChange={setEditRate}><SelectTrigger id="edit-rate" className="wide-select"><SelectValue/></SelectTrigger><SelectContent>{rates.map(value=><SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></div>
+          <div className="field"><label htmlFor="edit-date">日付</label><Input id="edit-date" type="date" value={editDate} onChange={event=>setEditDate(event.target.value)} required/></div>
+          <div className="field"><label htmlFor="edit-name">担当者</label><Input id="edit-name" value={editName} onChange={event=>setEditName(event.target.value)} maxLength={100} required/></div>
+          <div className="field"><label htmlFor="edit-amount">玉数・枚数</label><Input id="edit-amount" type="number" min="1" max="100000000" value={editAmount} onChange={event=>setEditAmount(event.target.value)} required/></div>
+          <div className="field full"><label htmlFor="edit-purpose">用途・詳細</label><Textarea id="edit-purpose" value={editPurpose} onChange={event=>setEditPurpose(event.target.value)} maxLength={1000} rows={3} required/></div>
+          {detailError && <p className="form-alert error" role="alert">{detailError}</p>}
+          <div className="edit-actions"><button type="button" onClick={()=>{setEditing(false);setDetailError("");}}>キャンセル</button><button type="submit" disabled={editingSave}>{editingSave?"保存中…":"修正を保存"}</button></div>
+        </form> : <div className="detail-content">
+          <div className="detail-grid"><div><small>レート</small><strong>{selected.rate}</strong></div><div><small>担当者</small><strong>{selected.person_name}</strong></div><div><small>玉数・枚数</small><strong>{selected.amount.toLocaleString()}{selected.unit}</strong></div><div><small>用途</small><strong>{selected.purpose}</strong></div></div>
+          <button type="button" className="edit-record-button" onClick={()=>startEditingRecord(selected)}><Pencil size={16}/>この記録を修正</button>
+          <div className="receipt-panel"><span>レシート画像</span><img src={`/api/records/${selected.id}/receipt`} alt="添付されたレシート"/></div>
+          <div className="receipt-panel hallcon-panel"><span>ホールコン画像</span>{selected.has_hallcon ? <img src={`/api/records/${selected.id}/hallcon`} alt="添付されたホールコン画面"/> : <div className="missing-image">既存記録のため画像はありません</div>}</div>
+          {selected.confirmed_at ? <div className="signed-panel"><strong>店長確認済み</strong><span>{selected.confirmed_by} · {new Date(selected.confirmed_at).toLocaleString("ja-JP")}</span>{selected.has_signature && <img src={`/api/records/${selected.id}/signature`} alt="店長確認サイン"/>}</div> : <div className="sign-form"><h3>店長確認サイン</h3><p>店長本人が名前とサインを記入してください。</p><label htmlFor="manager-name">店長名</label><Input id="manager-name" value={managerName} onChange={e=>setManagerName(e.target.value)} maxLength={100} placeholder="店長名を入力"/><div className="signature-label"><span>サイン</span><button type="button" className="clear-signature" onClick={clearSignature} disabled={!hasInk}>クリア</button></div><canvas ref={canvasRef} width={600} height={160} className="signature-canvas" aria-label="店長確認サイン記入欄" onPointerDown={beginDraw} onPointerMove={moveDraw} onPointerUp={endDraw} onPointerCancel={endDraw}/>{detailError && <p className="form-alert error" role="alert">{detailError}</p>}<button type="button" className="submit-button" onClick={confirmRecord} disabled={confirming}>{confirming?"保存中…":"店長確認を保存"}</button></div>}
+        </div>)}
+      </DialogContent>
+    </Dialog>
+    <Dialog open={deleteOpen} onOpenChange={open=>{setDeleteOpen(open);if(!open){setDeletePassword("");setDeleteError("");}}}>
+      <DialogContent className="delete-dialog"><DialogHeader><DialogTitle>この月の記録を削除</DialogTitle><DialogDescription>{store}の{Number(month.slice(0,4))}年{Number(month.slice(5,7))}月の記録をすべて削除します。</DialogDescription></DialogHeader><div className="delete-warning"><Trash2 size={20}/><p>レシート・ホールコン画像・店長サインも削除され、元に戻せません。</p></div><label htmlFor="delete-password">削除パスワード</label><Input id="delete-password" type="password" value={deletePassword} onChange={event=>setDeletePassword(event.target.value)} autoComplete="off" placeholder="パスワードを入力"/>{deleteError && <p className="form-alert error" role="alert">{deleteError}</p>}<button type="button" className="confirm-delete-button" disabled={deleting || !deletePassword} onClick={deleteMonthRecords}>{deleting?"削除中…":"この月の記録を削除する"}</button></DialogContent>
+    </Dialog>
   </main>;
 }
