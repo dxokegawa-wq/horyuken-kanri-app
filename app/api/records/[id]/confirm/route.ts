@@ -6,7 +6,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const { id } = await context.params;
     const body = await request.json() as { manager_name?: string; signature?: string };
     const managerName = body.manager_name?.trim() ?? "";
-    if (!managerName || managerName.length > 100) return Response.json({ error: "店長名を100文字以内で入力してください。" }, { status: 400 });
+    if (!managerName || managerName.length > 100) return Response.json({ error: "店舗責任者名を100文字以内で入力してください。" }, { status: 400 });
     const encoded = body.signature?.match(/^data:image\/png;base64,([A-Za-z0-9+/=]+)$/)?.[1];
     if (!encoded || encoded.length > 400000) return Response.json({ error: "サインを記入してください。" }, { status: 400 });
     const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
@@ -31,7 +31,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }
     return Response.json({ confirmed_by: managerName, confirmed_at: now });
   } catch (error) {
-    console.error("店長確認の保存に失敗", error);
+    console.error("店舗責任者確認の保存に失敗", error);
     return Response.json({ error: "確認を保存できませんでした。再試行してください。" }, { status: 503 });
   }
 }
