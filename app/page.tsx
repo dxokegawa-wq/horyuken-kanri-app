@@ -23,6 +23,7 @@ type PageModelContext = {
 };
 
 const today = () => new Date().toLocaleDateString("sv-SE");
+const currentMonth = () => today().slice(0, 7);
 const rates = [
   "4円パチンコ",
   "1円パチンコ",
@@ -50,6 +51,7 @@ export default function Home() {
   const [fileKey, setFileKey] = useState(0);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
+  const [month, setMonth] = useState(currentMonth);
   const [selected, setSelected] = useState<RecordItem | null>(null);
   const [managerName, setManagerName] = useState("");
   const [confirming, setConfirming] = useState(false);
@@ -58,10 +60,11 @@ export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
 
-  async function loadRecords() {
+  async function loadRecords(selectedMonth = month) {
     setLoadError("");
+    setLoading(true);
     try {
-      const response = await fetch("/api/records", { cache: "no-store" });
+      const response = await fetch(`/api/records?month=${encodeURIComponent(selectedMonth)}`, { cache: "no-store" });
       const data = await response.json() as { records: RecordItem[]; error?: string };
       if (!response.ok) throw new Error(data.error || "記録を読み込めませんでした。");
       setRecords(data.records);
@@ -71,7 +74,7 @@ export default function Home() {
       setLoading(false);
     }
   }
-  useEffect(() => { void loadRecords(); }, []);
+  useEffect(() => { void loadRecords(month); }, [month]);
   useEffect(() => {
     const context = (document as Document & { modelContext?: PageModelContext }).modelContext;
     if (!context?.registerTool) return;
@@ -129,7 +132,9 @@ export default function Home() {
       const response = await fetch("/api/records", { method: "POST", body });
       const data = await response.json() as { record: RecordItem; error?: string };
       if (!response.ok) throw new Error(data.error || "保存できませんでした。");
-      setRecords(current => [data.record, ...current]);
+      const savedMonth = data.record.record_date.slice(0, 7);
+      if (savedMonth === month) setRecords(current => [data.record, ...current]);
+      else setMonth(savedMonth);
       setName(""); setAmount(""); setPurpose(""); setFile(null); setFileKey(value => value + 1);
       setSuccess("記録を保存しました。店長確認は一覧から行えます。");
     } catch (caught) {
@@ -205,8 +210,9 @@ export default function Home() {
           </form>
         </section>
         <section className="ledger-card" aria-labelledby="ledger-heading"><div className="ledger-heading"><div><p className="eyebrow">一覧</p><h2 id="ledger-heading">記録台帳</h2></div><span className="total-pill">{records.length} 件</span></div>
+          <label className="month-picker" htmlFor="ledger-month"><span>確認する月</span><Input id="ledger-month" type="month" value={month} onChange={event=>setMonth(event.target.value)} /></label>
           <div className="ledger-toolbar"><label className="search-box"><Search size={17}/><Input aria-label="担当者・用途で検索" value={search} onChange={e=>setSearch(e.target.value)} placeholder="担当者・用途で検索"/></label><Select value={filter} onValueChange={setFilter}><SelectTrigger aria-label="確認状態で絞り込み" className="filter-select"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="all">すべて</SelectItem><SelectItem value="pending">確認待ち</SelectItem><SelectItem value="confirmed">確認済み</SelectItem></SelectContent></Select></div>
-          {loadError && <div className="list-error" role="alert">{loadError}<button type="button" onClick={loadRecords}>再読み込み</button></div>}
+          {loadError && <div className="list-error" role="alert">{loadError}<button type="button" onClick={()=>loadRecords(month)}>再読み込み</button></div>}
           {loading ? <p className="loading-state">記録を読み込み中…</p> : visible.length === 0 ? <div className="empty-state"><span className="empty-icon"><FileImage size={30}/></span><h3>{records.length ? "該当する記録がありません" : "まだ記録がありません"}</h3><p>{records.length ? "検索条件を変えてください。" : "左のフォームから最初のレシートを登録してください。"}</p></div> : <Table className="records-table"><TableHeader><TableRow><TableHead>日付・区分</TableHead><TableHead>担当者・用途</TableHead><TableHead>玉数/枚数</TableHead><TableHead>確認</TableHead></TableRow></TableHeader><TableBody>{visible.map(row=><TableRow key={row.id} className="record-row" onClick={()=>{setSelected(row);setDetailError("");setManagerName("");setHasInk(false);}}><TableCell><strong>{row.record_date}</strong><small>{row.kind==="hold"?"保留券":"手入力"} · {row.rate}</small></TableCell><TableCell><strong>{row.person_name}</strong><small className="truncate-purpose">{row.purpose}</small></TableCell><TableCell><strong>{row.amount.toLocaleString()}{row.unit}</strong></TableCell><TableCell><span className={row.confirmed_at?"confirmed-pill":"pending-pill"}>{row.confirmed_at?"確認済み":"確認待ち"}</span></TableCell></TableRow>)}</TableBody></Table>}
         </section>
       </div>

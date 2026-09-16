@@ -8,11 +8,17 @@ function fail(message: string, status = 400) {
   return Response.json({ error: message }, { status });
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const month = new URL(request.url).searchParams.get("month") ?? "";
+    if (!/^\d{4}-\d{2}$/.test(month)) return fail("確認する月を選択してください。");
+    const [year, monthNumber] = month.split("-").map(Number);
+    if (monthNumber < 1 || monthNumber > 12) return fail("確認する月を選択してください。");
+    const startDate = `${month}-01`;
+    const endDate = new Date(Date.UTC(year, monthNumber, 1)).toISOString().slice(0, 10);
     const result = await db().prepare(
-      "SELECT * FROM records ORDER BY record_date DESC, created_at DESC LIMIT 500"
-    ).all<RecordRow>();
+      "SELECT * FROM records WHERE record_date >= ? AND record_date < ? ORDER BY record_date DESC, created_at DESC LIMIT 500"
+    ).bind(startDate, endDate).all<RecordRow>();
     return Response.json({ records: (result.results ?? []).map(publicRecord) });
   } catch (error) {
     console.error("記録一覧の取得に失敗", error);
