@@ -29,6 +29,13 @@
       "when": 1789617600000,
       "tag": "0003_month_end_photos",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1789704000000,
+      "tag": "0004_second_month_end_photo",
+      "breakpoints": true
     }
   ]
 }

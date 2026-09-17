@@ -104,13 +104,13 @@ export async function DELETE(request: Request) {
     const rows = await db().prepare(
       "SELECT receipt_key, hallcon_key, signature_key FROM records WHERE store = ? AND record_date >= ? AND record_date < ?"
     ).bind(store, startDate, endDate).all<{ receipt_key: string; hallcon_key: string | null; signature_key: string | null }>();
-    const monthEnd = await db().prepare("SELECT photo_key FROM month_end_photos WHERE store = ? AND month = ?")
-      .bind(store, month).first<{ photo_key: string }>();
+    const monthEnd = await db().prepare("SELECT photo_key, photo2_key FROM month_end_photos WHERE store = ? AND month = ?")
+      .bind(store, month).first<{ photo_key: string; photo2_key: string | null }>();
     const [result] = await db().batch([
       db().prepare("DELETE FROM records WHERE store = ? AND record_date >= ? AND record_date < ?").bind(store, startDate, endDate),
       db().prepare("DELETE FROM month_end_photos WHERE store = ? AND month = ?").bind(store, month),
     ]);
-    const keys = [...(rows.results ?? []).flatMap(row => [row.receipt_key, row.hallcon_key, row.signature_key]), monthEnd?.photo_key]
+    const keys = [...(rows.results ?? []).flatMap(row => [row.receipt_key, row.hallcon_key, row.signature_key]), monthEnd?.photo_key, monthEnd?.photo2_key]
       .filter((key): key is string => !!key);
     await Promise.allSettled(keys.map(key => bucket().delete(key)));
     return Response.json({ deleted: result.meta.changes ?? 0 });

@@ -32,4 +32,8 @@ export const monthEndPhotos = sqliteTable("month_end_photos", {
   photoType: text("photo_type").notNull(),
   photoName: text("photo_name").notNull(),
   uploadedAt: text("uploaded_at").notNull(),
+  photo2Key: text("photo2_key"),
+  photo2Type: text("photo2_type"),
+  photo2Name: text("photo2_name"),
+  photo2UploadedAt: text("photo2_uploaded_at"),
 }, table => [primaryKey({ columns: [table.store, table.month] })]);

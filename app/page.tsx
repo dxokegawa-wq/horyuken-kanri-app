@@ -89,14 +89,14 @@ export default function Home() {
   const [filter, setFilter] = useState("all");
   const [month, setMonth] = useState(currentMonth);
   const [view, setView] = useState<"register" | "month-end">("register");
-  const [monthPhoto, setMonthPhoto] = useState<MonthPhoto | null>(null);
+  const [monthPhotos, setMonthPhotos] = useState<[MonthPhoto | null, MonthPhoto | null]>([null, null]);
   const [monthPhotoLoading, setMonthPhotoLoading] = useState(false);
   const [monthPhotoError, setMonthPhotoError] = useState("");
   const [monthPhotoSuccess, setMonthPhotoSuccess] = useState("");
-  const [monthPhotoFile, setMonthPhotoFile] = useState<File | null>(null);
-  const [monthPhotoInputKey, setMonthPhotoInputKey] = useState(0);
-  const [monthPhotoVersion, setMonthPhotoVersion] = useState(0);
-  const [savingMonthPhoto, setSavingMonthPhoto] = useState(false);
+  const [monthPhotoFiles, setMonthPhotoFiles] = useState<[File | null, File | null]>([null, null]);
+  const [monthPhotoInputKeys, setMonthPhotoInputKeys] = useState<[number, number]>([0, 0]);
+  const [monthPhotoVersions, setMonthPhotoVersions] = useState<[number, number]>([0, 0]);
+  const [savingMonthPhoto, setSavingMonthPhoto] = useState<1 | 2 | null>(null);
   const [selected, setSelected] = useState<RecordItem | null>(null);
   const [editing, setEditing] = useState(false);
   const [editKind, setEditKind] = useState<"hold" | "manual">("hold");
@@ -140,12 +140,12 @@ export default function Home() {
     if (!store || view !== "month-end") return;
     let active = true;
     const timer = window.setTimeout(async () => {
-      setMonthPhotoLoading(true); setMonthPhotoError(""); setMonthPhoto(null);
+      setMonthPhotoLoading(true); setMonthPhotoError(""); setMonthPhotos([null, null]);
       try {
         const response = await fetch(`/api/month-end?store=${encodeURIComponent(store)}&month=${encodeURIComponent(month)}`, { cache: "no-store" });
-        const data = await response.json() as { photo: MonthPhoto | null; error?: string };
+        const data = await response.json() as { photos: [MonthPhoto | null, MonthPhoto | null]; error?: string };
         if (!response.ok) throw new Error(data.error || "月末写真を読み込めませんでした。");
-        if (active) setMonthPhoto(data.photo);
+        if (active) setMonthPhotos(data.photos);
       } catch (caught) {
         if (active) setMonthPhotoError(caught instanceof Error ? caught.message : "月末写真を読み込めませんでした。");
       } finally {
@@ -307,7 +307,7 @@ export default function Home() {
       });
       const data = await response.json() as { deleted?: number; error?: string };
       if (!response.ok) throw new Error(data.error || "削除できませんでした。");
-      setRecords([]); setMonthPhoto(null); setMonthPhotoVersion(value => value + 1);
+      setRecords([]); setMonthPhotos([null, null]); setMonthPhotoVersions(([first, second]) => [first + 1, second + 1]);
       setDeleteOpen(false); setDeletePassword("");
       setSuccess(`${data.deleted ?? 0}件の記録を削除しました。`);
     } catch (caught) {
@@ -315,24 +315,28 @@ export default function Home() {
     } finally { setDeleting(false); }
   }
 
-  async function saveMonthPhoto(event: FormEvent<HTMLFormElement>) {
+  async function saveMonthPhoto(event: FormEvent<HTMLFormElement>, slot: 1 | 2) {
     event.preventDefault();
-    if (!store || !monthPhotoFile) { setMonthPhotoError("ホールコン写真を選択してください。"); return; }
-    if (monthPhotoFile.size > 10 * 1024 * 1024) { setMonthPhotoError("写真は10MB以内にしてください。"); return; }
-    setMonthPhotoError(""); setMonthPhotoSuccess(""); setSavingMonthPhoto(true);
+    const file = monthPhotoFiles[slot - 1];
+    if (!store || !file) { setMonthPhotoError(`${slot}枚目の写真を選択してください。`); return; }
+    if (slot === 2 && !monthPhotos[0]) { setMonthPhotoError("先に1枚目を保存してください。"); return; }
+    if (file.size > 10 * 1024 * 1024) { setMonthPhotoError("写真は10MB以内にしてください。"); return; }
+    setMonthPhotoError(""); setMonthPhotoSuccess(""); setSavingMonthPhoto(slot);
     try {
-      const image = await optimizeImage(monthPhotoFile);
+      const image = await optimizeImage(file);
       const body = new FormData();
-      body.set("store", store); body.set("month", month); body.set("photo", image);
+      body.set("store", store); body.set("month", month); body.set("slot", String(slot)); body.set("photo", image);
       const response = await fetch("/api/month-end", { method: "POST", body });
       const data = await response.json() as { photo: MonthPhoto; error?: string };
       if (!response.ok) throw new Error(data.error || "月末写真を保存できませんでした。");
-      setMonthPhoto(data.photo); setMonthPhotoVersion(value => value + 1);
-      setMonthPhotoFile(null); setMonthPhotoInputKey(value => value + 1);
-      setMonthPhotoSuccess("月末のホールコン写真を保存しました。");
+      setMonthPhotos(current => slot === 1 ? [data.photo, current[1]] : [current[0], data.photo]);
+      setMonthPhotoVersions(([first, second]) => slot === 1 ? [first + 1, second] : [first, second + 1]);
+      setMonthPhotoFiles(current => slot === 1 ? [null, current[1]] : [current[0], null]);
+      setMonthPhotoInputKeys(([first, second]) => slot === 1 ? [first + 1, second] : [first, second + 1]);
+      setMonthPhotoSuccess(`${slot}枚目のホールコン写真を保存しました。`);
     } catch (caught) {
       setMonthPhotoError(caught instanceof Error ? caught.message : "月末写真を保存できませんでした。");
-    } finally { setSavingMonthPhoto(false); }
+    } finally { setSavingMonthPhoto(null); }
   }
 
   function openRecord(row: RecordItem) {
@@ -386,13 +390,23 @@ export default function Home() {
       </div>
       </> : <section className="month-end-screen" aria-labelledby="month-end-heading">
         <div className="page-heading month-end-heading"><div><p className="eyebrow">{store} · 月末確認</p><h1 id="month-end-heading">月末ホールコン記録</h1><p className="page-intro">月末の画面写真と、その月の保留券・手入力を確認できます。</p></div></div>
-        <div className="month-end-topline"><label htmlFor="month-end-month">確認する月<Input id="month-end-month" type="month" value={month} onChange={event=>{setMonth(event.target.value);setMonthPhotoFile(null);setMonthPhotoSuccess("");setMonthPhotoError("");}}/></label><div><small>月末最終日</small><strong>{monthEndDate(month)}</strong></div></div>
+        <div className="month-end-topline"><label htmlFor="month-end-month">確認する月<Input id="month-end-month" type="month" value={month} onChange={event=>{setMonth(event.target.value);setMonthPhotoFiles([null,null]);setMonthPhotoInputKeys(([first,second])=>[first+1,second+1]);setMonthPhotoSuccess("");setMonthPhotoError("");}}/></label><div><small>月末最終日</small><strong>{monthEndDate(month)}</strong></div></div>
         <div className="month-end-columns">
           <section className="month-end-photo-card" aria-labelledby="month-photo-heading">
             <h2 id="month-photo-heading">月末のホールコン写真</h2>
-            <p>最終日のホールコン画面を撮影して保存してください。</p>
-            {monthPhotoLoading ? <p className="loading-state">写真を読み込み中…</p> : monthPhoto ? <div className="month-end-photo-preview"><img key={monthPhotoVersion} src={`/api/month-end/photo?store=${encodeURIComponent(store)}&month=${encodeURIComponent(month)}&v=${monthPhotoVersion}`} alt={`${store} ${month}の月末ホールコン写真`}/><small>保存日時：{new Date(monthPhoto.uploaded_at).toLocaleString("ja-JP")}</small></div> : <div className="month-end-photo-empty"><FileImage size={30}/><span>写真はまだありません</span></div>}
-            <form onSubmit={saveMonthPhoto}><label className="upload-zone hallcon-upload" htmlFor="month-end-photo"><UploadCloud size={25}/><span>{monthPhotoFile ? monthPhotoFile.name : "写真を撮影・選択"}</span><small>JPG・PNG・WEBP、10MBまで</small></label><input key={monthPhotoInputKey} id="month-end-photo" className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={event=>setMonthPhotoFile(event.target.files?.[0]??null)}/>{monthPhotoError && <p className="form-alert error" role="alert">{monthPhotoError}</p>}{monthPhotoSuccess && <p className="form-alert success" role="status">{monthPhotoSuccess}</p>}<button type="submit" className="submit-button" disabled={!monthPhotoFile || savingMonthPhoto}>{savingMonthPhoto ? "保存中…" : monthPhoto ? "写真を撮り直して保存" : "月末写真を保存"}</button></form>
+            <p>最終日のホールコン画面を2枚撮影して保存してください。</p>
+            {monthPhotoLoading ? <p className="loading-state">写真を読み込み中…</p> : <div className="month-end-photo-slots">{([1,2] as const).map(slot => {
+              const index = slot - 1;
+              const photo = monthPhotos[index];
+              const file = monthPhotoFiles[index];
+              return <div className="month-end-photo-slot" key={slot}>
+                <h3>{slot}枚目 <span>{photo ? "保存済み" : "未保存"}</span></h3>
+                {photo ? <div className="month-end-photo-preview"><img key={monthPhotoVersions[index]} src={`/api/month-end/photo?store=${encodeURIComponent(store)}&month=${encodeURIComponent(month)}&slot=${slot}&v=${monthPhotoVersions[index]}`} alt={`${store} ${month}の月末ホールコン写真 ${slot}枚目`}/><small>保存日時：{new Date(photo.uploaded_at).toLocaleString("ja-JP")}</small></div> : <div className="month-end-photo-empty"><FileImage size={30}/><span>写真はまだありません</span></div>}
+                <form onSubmit={event=>saveMonthPhoto(event,slot)}><label className="upload-zone hallcon-upload" htmlFor={`month-end-photo-${slot}`}><UploadCloud size={25}/><span>{file ? file.name : `${slot}枚目を撮影・選択`}</span><small>JPG・PNG・WEBP、10MBまで</small></label><input key={monthPhotoInputKeys[index]} id={`month-end-photo-${slot}`} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" disabled={slot===2&&!monthPhotos[0]} onChange={event=>setMonthPhotoFiles(([first,second])=>slot===1?[event.target.files?.[0]??null,second]:[first,event.target.files?.[0]??null])}/><button type="submit" className="submit-button" disabled={!file || savingMonthPhoto!==null || (slot===2&&!monthPhotos[0])}>{savingMonthPhoto===slot ? "保存中…" : photo ? `${slot}枚目を撮り直して保存` : `${slot}枚目を保存`}</button></form>
+                {slot===2&&!monthPhotos[0]&&<small className="month-end-slot-note">先に1枚目を保存してください。</small>}
+              </div>;
+            })}</div>}
+            {monthPhotoError && <p className="form-alert error" role="alert">{monthPhotoError}</p>}{monthPhotoSuccess && <p className="form-alert success" role="status">{monthPhotoSuccess}</p>}
           </section>
           <section className="month-end-list-card" aria-labelledby="month-records-heading">
             <div className="ledger-heading"><h2 id="month-records-heading">当月のデータ一覧</h2><span className="total-pill">{records.length} 件</span></div>
