@@ -1,4 +1,5 @@
 import { adminPassword, bucket, db, publicRecord, type RecordRow } from "@/lib/records";
+import { notifyLineManagers } from "@/lib/line";
 
 export const runtime = "edge";
 const rates = new Set(["4円パチンコ", "1円パチンコ", "0.5円パチンコ", "20円スロット", "10円スロット", "5円スロット", "2円スロット"]);
@@ -80,7 +81,16 @@ export async function POST(request: Request) {
       await Promise.all([bucket().delete(receiptKey), bucket().delete(hallconKey)]).catch(() => undefined);
       throw error;
     }
-    return Response.json({ record: { id, store, kind, rate, record_date: recordDate, person_name: personName, amount, unit, purpose, receipt_type: receipt.type, receipt_name: receipt.name.slice(0, 200), hallcon_type: hallcon.type, hallcon_name: hallcon.name.slice(0, 200), created_at: createdAt, confirmed_by: null, confirmed_at: null, has_hallcon: true, has_signature: false } }, { status: 201 });
+    let lineNotification: { sent: number; status: "sent" | "not_configured" | "not_linked" | "failed" } = { sent: 0, status: "failed" };
+    try {
+      lineNotification = await notifyLineManagers({ id, store, kind, rate, record_date: recordDate, person_name: personName, amount, unit, purpose });
+    } catch (error) {
+      console.error("記録保存後のLINE通知に失敗", error);
+    }
+    return Response.json({
+      record: { id, store, kind, rate, record_date: recordDate, person_name: personName, amount, unit, purpose, receipt_type: receipt.type, receipt_name: receipt.name.slice(0, 200), hallcon_type: hallcon.type, hallcon_name: hallcon.name.slice(0, 200), created_at: createdAt, confirmed_by: null, confirmed_at: null, has_hallcon: true, has_signature: false },
+      line_notification: lineNotification,
+    }, { status: 201 });
   } catch (error) {
     console.error("記録の保存に失敗", error);
     return fail("保存できませんでした。入力内容を確認して再試行してください。", 503);
@@ -106,7 +116,8 @@ export async function DELETE(request: Request) {
     ).bind(store, startDate, endDate).all<{ receipt_key: string; hallcon_key: string | null; signature_key: string | null }>();
     const monthEnd = await db().prepare("SELECT photo_key, photo2_key FROM month_end_photos WHERE store = ? AND month = ?")
       .bind(store, month).first<{ photo_key: string; photo2_key: string | null }>();
-    const [result] = await db().batch([
+    const [, result] = await db().batch([
+      db().prepare("DELETE FROM line_approval_tokens WHERE record_id IN (SELECT id FROM records WHERE store = ? AND record_date >= ? AND record_date < ?)").bind(store, startDate, endDate),
       db().prepare("DELETE FROM records WHERE store = ? AND record_date >= ? AND record_date < ?").bind(store, startDate, endDate),
       db().prepare("DELETE FROM month_end_photos WHERE store = ? AND month = ?").bind(store, month),
     ]);

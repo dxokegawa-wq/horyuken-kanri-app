@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent } from "react";
-import { Building2, CalendarDays, ClipboardCheck, FileImage, MapPin, Pencil, Plus, Search, Ticket, Trash2, UploadCloud } from "lucide-react";
+import { Building2, CalendarDays, ClipboardCheck, FileImage, Link2, MapPin, MessageCircle, Pencil, Plus, Search, Ticket, Trash2, UploadCloud, UserRoundCheck } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -25,6 +25,7 @@ type PageModelContext = {
 
 const today = () => new Date().toLocaleDateString("sv-SE");
 const currentMonth = () => today().slice(0, 7);
+const webhookUrl = "https://horyuken-kanri-20260914.dai-nishiyama.chatgpt.site/api/line/webhook";
 const rates = [
   "4円パチンコ",
   "1円パチンコ",
@@ -37,6 +38,7 @@ const rates = [
 const stores = ["岩槻本店", "桶川店", "平塚店", "ふじみ野店", "美女木店", "鶴瀬店"] as const;
 type Store = typeof stores[number];
 type MonthPhoto = { name: string; uploaded_at: string };
+type LineManager = { line_user_id: string; display_name: string; linked_at: string };
 const monthEndDate = (value: string) => {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) return "月を選択";
   const [year, month] = value.split("-").map(Number);
@@ -88,7 +90,7 @@ export default function Home() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [month, setMonth] = useState(currentMonth);
-  const [view, setView] = useState<"register" | "month-end">("register");
+  const [view, setView] = useState<"register" | "month-end" | "line">("register");
   const [monthPhotos, setMonthPhotos] = useState<[MonthPhoto | null, MonthPhoto | null]>([null, null]);
   const [monthPhotoLoading, setMonthPhotoLoading] = useState(false);
   const [monthPhotoError, setMonthPhotoError] = useState("");
@@ -97,6 +99,15 @@ export default function Home() {
   const [monthPhotoInputKeys, setMonthPhotoInputKeys] = useState<[number, number]>([0, 0]);
   const [monthPhotoVersions, setMonthPhotoVersions] = useState<[number, number]>([0, 0]);
   const [savingMonthPhoto, setSavingMonthPhoto] = useState<1 | 2 | null>(null);
+  const [linePassword, setLinePassword] = useState("");
+  const [lineManagers, setLineManagers] = useState<LineManager[]>([]);
+  const [lineConfigured, setLineConfigured] = useState<boolean | null>(null);
+  const [lineOfficialUrl, setLineOfficialUrl] = useState<string | null>(null);
+  const [lineCode, setLineCode] = useState("");
+  const [lineCodeExpires, setLineCodeExpires] = useState("");
+  const [lineLoading, setLineLoading] = useState(false);
+  const [lineError, setLineError] = useState("");
+  const [lineSuccess, setLineSuccess] = useState("");
   const [selected, setSelected] = useState<RecordItem | null>(null);
   const [editing, setEditing] = useState(false);
   const [editKind, setEditKind] = useState<"hold" | "manual">("hold");
@@ -213,14 +224,16 @@ export default function Home() {
       body.set("record_date", date); body.set("person_name", name); body.set("amount", amount);
       body.set("purpose", purpose);
       const response = await fetch("/api/records", { method: "POST", body });
-      const data = await response.json() as { record: RecordItem; error?: string };
+      const data = await response.json() as { record: RecordItem; line_notification?: { sent: number; status: string }; error?: string };
       if (!response.ok) throw new Error(data.error || "保存できませんでした。");
       const savedMonth = data.record.record_date.slice(0, 7);
       if (savedMonth === month) setRecords(current => [data.record, ...current]);
       else setMonth(savedMonth);
       setName(""); setAmount(""); setPurpose(""); setFile(null); setFileKey(value => value + 1);
       setHallconFile(null); setHallconFileKey(value => value + 1);
-      setSuccess("記録を保存しました。店舗責任者確認は一覧から行えます。");
+      setSuccess(data.line_notification?.status === "sent"
+        ? `記録を保存し、店舗長${data.line_notification.sent}名へLINE通知しました。`
+        : "記録を保存しました。LINE通知先が未設定のため、一覧から確認してください。");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "保存できませんでした。");
     } finally { setSaving(false); }
@@ -339,12 +352,42 @@ export default function Home() {
     } finally { setSavingMonthPhoto(null); }
   }
 
+  async function lineSetup(action: "status" | "generate" | "unlink", lineUserId?: string) {
+    if (!store) return;
+    if (!linePassword) { setLineError("管理パスワードを入力してください。"); return; }
+    setLineLoading(true); setLineError(""); setLineSuccess("");
+    try {
+      const response = await fetch("/api/line/setup", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, password: linePassword, store, line_user_id: lineUserId }),
+      });
+      const data = await response.json() as {
+        managers?: LineManager[]; configured?: boolean; official_account_url?: string | null;
+        code?: string; expires_at?: string; removed?: boolean; error?: string;
+      };
+      if (!response.ok) throw new Error(data.error || "LINE連携を更新できませんでした。");
+      if (action === "status") {
+        setLineManagers(data.managers ?? []); setLineConfigured(!!data.configured); setLineOfficialUrl(data.official_account_url ?? null);
+        setLineSuccess("連携状況を読み込みました。");
+      } else if (action === "generate") {
+        setLineCode(data.code ?? ""); setLineCodeExpires(data.expires_at ?? "");
+        setLineSuccess("15分間有効な連携コードを発行しました。");
+      } else {
+        setLineManagers(current => current.filter(manager => manager.line_user_id !== lineUserId));
+        setLineSuccess("店舗長のLINE連携を解除しました。");
+      }
+    } catch (caught) {
+      setLineError(caught instanceof Error ? caught.message : "LINE連携を更新できませんでした。");
+    } finally { setLineLoading(false); }
+  }
+
   function openRecord(row: RecordItem) {
     setSelected(row); setDetailError(""); setManagerName(""); setHasInk(false);
   }
 
   function chooseStore(value: Store) {
     setStore(value); setView("register"); setRecords([]); setSearch(""); setFilter("all"); setLoadError(""); setSuccess(""); setError("");
+    setLineManagers([]); setLineConfigured(null); setLineCode(""); setLineError(""); setLineSuccess("");
   }
 
   if (!store) return <main className="store-select-screen">
@@ -359,7 +402,7 @@ export default function Home() {
 
   return <main className="app-shell">
     <header className="topbar"><div className="brand"><span className="brand-mark"><Ticket size={20}/></span><div><strong>保留券・手入力管理</strong><small>{store}</small></div></div><button type="button" className="change-store" onClick={()=>setStore(null)}><MapPin size={15}/>{store}<span>変更</span></button></header>
-    <nav className="view-nav" aria-label="管理画面"><button type="button" className={view==="register"?"active":""} aria-current={view==="register"?"page":undefined} onClick={()=>setView("register")}><Ticket size={17}/>記録・台帳</button><button type="button" className={view==="month-end"?"active":""} aria-current={view==="month-end"?"page":undefined} onClick={()=>setView("month-end")}><CalendarDays size={17}/>月末確認</button></nav>
+    <nav className="view-nav" aria-label="管理画面"><button type="button" className={view==="register"?"active":""} aria-current={view==="register"?"page":undefined} onClick={()=>setView("register")}><Ticket size={17}/>記録・台帳</button><button type="button" className={view==="month-end"?"active":""} aria-current={view==="month-end"?"page":undefined} onClick={()=>setView("month-end")}><CalendarDays size={17}/>月末確認</button><button type="button" className={view==="line"?"active":""} aria-current={view==="line"?"page":undefined} onClick={()=>setView("line")}><MessageCircle size={17}/>LINE連携</button></nav>
     <div className="workspace">
       {view === "register" ? <>
       <div className="page-heading"><div><p className="eyebrow">記録台帳</p><h1>新しい記録を登録</h1><p className="page-intro">レシートを添付し、内容を入力してください。</p></div><span className="date-chip">本日の記録</span></div>
@@ -388,7 +431,7 @@ export default function Home() {
           {loading ? <p className="loading-state">記録を読み込み中…</p> : visible.length === 0 ? <div className="empty-state"><span className="empty-icon"><FileImage size={30}/></span><h3>{records.length ? "該当する記録がありません" : "まだ記録がありません"}</h3><p>{records.length ? "検索条件を変えてください。" : "左のフォームから最初のレシートを登録してください。"}</p></div> : <Table className="records-table"><TableHeader><TableRow><TableHead>日付・区分</TableHead><TableHead>担当者・用途</TableHead><TableHead>玉数/枚数</TableHead><TableHead>確認</TableHead></TableRow></TableHeader><TableBody>{visible.map(row=><TableRow key={row.id} className="record-row" onClick={()=>openRecord(row)}><TableCell><strong>{row.record_date}</strong><small>{row.kind==="hold"?"保留券":"手入力"} · {row.rate}</small></TableCell><TableCell><strong>{row.person_name}</strong><small className="truncate-purpose">{row.purpose}</small></TableCell><TableCell><strong>{row.amount.toLocaleString()}{row.unit}</strong></TableCell><TableCell><span className={row.confirmed_at?"confirmed-pill":"pending-pill"}>{row.confirmed_at?"確認済み":"確認待ち"}</span></TableCell></TableRow>)}</TableBody></Table>}
         </section>
       </div>
-      </> : <section className="month-end-screen" aria-labelledby="month-end-heading">
+      </> : view === "month-end" ? <section className="month-end-screen" aria-labelledby="month-end-heading">
         <div className="page-heading month-end-heading"><div><p className="eyebrow">{store} · 月末確認</p><h1 id="month-end-heading">月末ホールコン記録</h1><p className="page-intro">月末の画面写真と、その月の保留券・手入力を確認できます。</p></div></div>
         <div className="month-end-topline"><label htmlFor="month-end-month">確認する月<Input id="month-end-month" type="month" value={month} onChange={event=>{setMonth(event.target.value);setMonthPhotoFiles([null,null]);setMonthPhotoInputKeys(([first,second])=>[first+1,second+1]);setMonthPhotoSuccess("");setMonthPhotoError("");}}/></label><div><small>月末最終日</small><strong>{monthEndDate(month)}</strong></div></div>
         <div className="month-end-columns">
@@ -414,6 +457,29 @@ export default function Home() {
             {loadError && <div className="list-error" role="alert">{loadError}<button type="button" onClick={()=>loadRecords(month,store)}>再読み込み</button></div>}
             {loading ? <p className="loading-state">記録を読み込み中…</p> : records.length === 0 ? <div className="month-end-list-empty">この月の記録はありません。</div> : <div className="month-end-records">{records.map(row=><button type="button" className="month-end-record" key={row.id} onClick={()=>openRecord(row)}><span className="month-end-record-top"><time>{row.record_date}</time><span className={row.confirmed_at?"confirmed-pill":"pending-pill"}>{row.confirmed_at?"確認済み":"確認待ち"}</span></span><span className="month-end-record-kind">{row.kind==="hold"?"保留券":"手入力"} · {row.rate}</span><span className="month-end-record-main"><strong>{row.person_name}</strong><strong>{row.amount.toLocaleString()}{row.unit}</strong></span><span className="month-end-record-purpose">{row.purpose}</span></button>)}</div>}
           </section>
+        </div>
+      </section> : <section className="line-setup-screen" aria-labelledby="line-setup-heading">
+        <div className="page-heading"><div><p className="eyebrow">{store} · 通知設定</p><h1 id="line-setup-heading">店舗長LINE連携</h1><p className="page-intro">店舗長をこの店舗に連携すると、記録登録時に承認ボタン付きのLINEが届きます。</p></div></div>
+        <div className="line-setup-grid">
+          <section className="line-setup-card">
+            <div className="card-heading"><span className="card-icon line-icon"><MessageCircle size={20}/></span><div><h2>連携を管理</h2><p>管理パスワードが必要です</p></div></div>
+            <label htmlFor="line-password">管理パスワード</label><Input id="line-password" type="password" value={linePassword} onChange={event=>setLinePassword(event.target.value)} autoComplete="off" placeholder="パスワードを入力"/>
+            <button type="button" className="line-secondary-button" disabled={lineLoading||!linePassword} onClick={()=>lineSetup("status")}><UserRoundCheck size={17}/>{lineLoading?"確認中…":"連携状況を確認"}</button>
+            {lineConfigured !== null && <div className={lineConfigured?"line-api-status ready":"line-api-status waiting"}><span></span>{lineConfigured?"LINE通知API 設定済み":"LINE通知APIの初期設定が必要です"}</div>}
+            {lineOfficialUrl && <a className="line-add-link" href={lineOfficialUrl} target="_blank" rel="noreferrer"><Link2 size={16}/>LINE公式アカウントを開く</a>}
+            {lineError&&<p className="form-alert error" role="alert">{lineError}</p>}{lineSuccess&&<p className="form-alert success" role="status">{lineSuccess}</p>}
+          </section>
+          <section className="line-setup-card">
+            <div className="line-section-heading"><div><h2>連携中の店舗長</h2><p>{store}への通知先</p></div><span className="total-pill">{lineManagers.length} 名</span></div>
+            {lineConfigured===null?<div className="line-empty">管理パスワードを入力して連携状況を確認してください。</div>:lineManagers.length===0?<div className="line-empty">まだ店舗長が連携されていません。</div>:<div className="line-manager-list">{lineManagers.map(manager=><div key={manager.line_user_id}><span className="line-manager-avatar"><UserRoundCheck size={18}/></span><span><strong>{manager.display_name}</strong><small>{new Date(manager.linked_at).toLocaleString("ja-JP")} 連携</small></span><button type="button" disabled={lineLoading} onClick={()=>lineSetup("unlink",manager.line_user_id)}>解除</button></div>)}</div>}
+          </section>
+          <section className="line-setup-card line-link-card">
+            <div className="line-section-heading"><div><h2>店舗長を追加</h2><p>15分間有効なコードで安全に連携します</p></div></div>
+            <ol><li>店舗長がLINE公式アカウントを友だち追加</li><li>下のボタンで連携コードを発行</li><li>店舗長がLINEで「連携 6桁コード」と送信</li></ol>
+            <button type="button" className="submit-button" disabled={lineLoading||!linePassword||lineConfigured===false} onClick={()=>lineSetup("generate")}>{lineLoading?"発行中…":"連携コードを発行"}</button>
+            {lineCode&&<div className="line-code-panel"><small>{store}の連携コード</small><strong>{lineCode}</strong><p>LINEで「連携 {lineCode}」と送信</p><span>有効期限：{new Date(lineCodeExpires).toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"})}</span></div>}
+          </section>
+          <section className="line-setup-card line-webhook-card"><h2>LINE側のWebhook URL</h2><p>LINE DevelopersのMessaging API設定に、次のURLを登録します。</p><code>{webhookUrl}</code></section>
         </div>
       </section>}
     </div>

@@ -37,3 +37,26 @@ export const monthEndPhotos = sqliteTable("month_end_photos", {
   photo2Name: text("photo2_name"),
   photo2UploadedAt: text("photo2_uploaded_at"),
 }, table => [primaryKey({ columns: [table.store, table.month] })]);
+
+export const lineManagers = sqliteTable("line_managers", {
+  lineUserId: text("line_user_id").primaryKey(),
+  store: text("store").notNull(),
+  displayName: text("display_name").notNull(),
+  linkedAt: text("linked_at").notNull(),
+}, table => [index("idx_line_managers_store").on(table.store)]);
+
+export const lineLinkCodes = sqliteTable("line_link_codes", {
+  code: text("code").primaryKey(),
+  store: text("store").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  createdAt: text("created_at").notNull(),
+}, table => [index("idx_line_link_codes_store").on(table.store)]);
+
+export const lineApprovalTokens = sqliteTable("line_approval_tokens", {
+  tokenHash: text("token_hash").primaryKey(),
+  recordId: text("record_id").notNull(),
+  store: text("store").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  usedAt: text("used_at"),
+  createdAt: text("created_at").notNull(),
+}, table => [index("idx_line_approval_record").on(table.recordId)]);
