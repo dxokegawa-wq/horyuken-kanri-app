@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Building2, CalendarDays, ClipboardCheck, FileImage, Link2, MapPin, MessageCircle, Pencil, Plus, Search, Ticket, Trash2, UploadCloud, UserRoundCheck } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -121,12 +121,7 @@ export default function Home() {
   const [deletePassword, setDeletePassword] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [deleting, setDeleting] = useState(false);
-  const [managerName, setManagerName] = useState("");
-  const [confirming, setConfirming] = useState(false);
   const [detailError, setDetailError] = useState("");
-  const [hasInk, setHasInk] = useState(false);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const drawing = useRef(false);
 
   const loadRecords = useCallback(async (selectedMonth: string, selectedStore: Store) => {
     setLoadError("");
@@ -240,49 +235,7 @@ export default function Home() {
   }
 
   function closeDetail(open: boolean) {
-    if (!open) { setSelected(null); setEditing(false); setDetailError(""); setManagerName(""); setHasInk(false); }
-  }
-  function clearSignature() {
-    const canvas = canvasRef.current;
-    canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
-    setHasInk(false);
-  }
-  function point(event: PointerEvent<HTMLCanvasElement>) {
-    const canvas = event.currentTarget, rect = canvas.getBoundingClientRect();
-    return { x: (event.clientX - rect.left) * canvas.width / rect.width, y: (event.clientY - rect.top) * canvas.height / rect.height };
-  }
-  function beginDraw(event: PointerEvent<HTMLCanvasElement>) {
-    const canvas = event.currentTarget, ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    canvas.setPointerCapture(event.pointerId); drawing.current = true;
-    const p = point(event); ctx.beginPath(); ctx.moveTo(p.x, p.y);
-    ctx.lineWidth = 3; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#173b4b";
-  }
-  function moveDraw(event: PointerEvent<HTMLCanvasElement>) {
-    if (!drawing.current) return;
-    const ctx = event.currentTarget.getContext("2d"); if (!ctx) return;
-    const p = point(event); ctx.lineTo(p.x, p.y); ctx.stroke(); setHasInk(true);
-  }
-  function endDraw() { drawing.current = false; }
-  async function confirmRecord() {
-    if (!selected) return;
-    setDetailError("");
-    if (!managerName.trim()) { setDetailError("店舗責任者名を入力してください。"); return; }
-    if (!hasInk || !canvasRef.current) { setDetailError("確認サインを記入してください。"); return; }
-    setConfirming(true);
-    try {
-      const response = await fetch(`/api/records/${selected.id}/confirm`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ manager_name: managerName, signature: canvasRef.current.toDataURL("image/png") })
-      });
-      const data = await response.json() as { confirmed_by: string; confirmed_at: string; error?: string };
-      if (!response.ok) throw new Error(data.error || "確認を保存できませんでした。");
-      setRecords(current => current.map(row => row.id === selected.id ? { ...row, confirmed_by: data.confirmed_by, confirmed_at: data.confirmed_at, has_signature: true } : row));
-      setSelected(row => row ? { ...row, confirmed_by: data.confirmed_by, confirmed_at: data.confirmed_at, has_signature: true } : null);
-      setSuccess("店舗責任者確認を保存しました。");
-    } catch (caught) {
-      setDetailError(caught instanceof Error ? caught.message : "確認を保存できませんでした。");
-    } finally { setConfirming(false); }
+    if (!open) { setSelected(null); setEditing(false); setDetailError(""); }
   }
 
   function startEditingRecord(record: RecordItem) {
@@ -418,7 +371,7 @@ export default function Home() {
             <div className="field"><label htmlFor="name">担当者 <em>必須</em></label><Input id="name" value={name} onChange={e=>setName(e.target.value)} maxLength={100} placeholder="担当者名" required/></div>
             <div className="field"><label htmlFor="count">玉数・枚数 <em>必須</em></label><Input id="count" type="number" min="1" max="100000000" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0" required/></div>
             <div className="field full"><label htmlFor="purpose">用途・詳細 <em>必須</em></label><Textarea id="purpose" value={purpose} onChange={e=>setPurpose(e.target.value)} maxLength={1000} placeholder="例：前日の保留券対応、台トラブルの補填など" rows={3} required/></div>
-            <div className="confirmation-preview"><ClipboardCheck size={19}/><div><strong>店舗責任者確認</strong><span>登録後、店舗責任者が確認サインを記入できます</span></div><span className="pending-pill">確認待ち</span></div>
+            <div className="confirmation-preview"><ClipboardCheck size={19}/><div><strong>店舗責任者LINE確認</strong><span>登録後、店舗責任者へLINEで承認依頼を通知します</span></div><span className="pending-pill">確認待ち</span></div>
             {error && <p className="form-alert error" role="alert">{error}</p>}
             {success && <p className="form-alert success" role="status">{success}</p>}
             <button type="submit" className="submit-button" disabled={saving}>{saving ? "保存中…" : "記録を保存する"} <span aria-hidden="true">→</span></button>
@@ -500,12 +453,12 @@ export default function Home() {
           <button type="button" className="edit-record-button" onClick={()=>startEditingRecord(selected)}><Pencil size={16}/>この記録を修正</button>
           <div className="receipt-panel"><span>レシート画像</span><img src={`/api/records/${selected.id}/receipt`} alt="添付されたレシート"/></div>
           <div className="receipt-panel hallcon-panel"><span>ホールコン画像</span>{selected.has_hallcon ? <img src={`/api/records/${selected.id}/hallcon`} alt="添付されたホールコン画面"/> : <div className="missing-image">既存記録のため画像はありません</div>}</div>
-          {selected.confirmed_at ? <div className="signed-panel"><strong>店舗責任者確認済み</strong><span>{selected.confirmed_by} · {new Date(selected.confirmed_at).toLocaleString("ja-JP")}</span>{selected.has_signature && <img src={`/api/records/${selected.id}/signature`} alt="店舗責任者確認サイン"/>}</div> : <div className="sign-form"><h3>店舗責任者確認サイン</h3><p>店舗責任者本人が名前とサインを記入してください。</p><label htmlFor="manager-name">店舗責任者名</label><Input id="manager-name" value={managerName} onChange={e=>setManagerName(e.target.value)} maxLength={100} placeholder="店舗責任者名を入力"/><div className="signature-label"><span>サイン</span><button type="button" className="clear-signature" onClick={clearSignature} disabled={!hasInk}>クリア</button></div><canvas ref={canvasRef} width={600} height={160} className="signature-canvas" aria-label="店舗責任者確認サイン記入欄" onPointerDown={beginDraw} onPointerMove={moveDraw} onPointerUp={endDraw} onPointerCancel={endDraw}/>{detailError && <p className="form-alert error" role="alert">{detailError}</p>}<button type="button" className="submit-button" onClick={confirmRecord} disabled={confirming}>{confirming?"保存中…":"店舗責任者確認を保存"}</button></div>}
+          {selected.confirmed_at ? <div className="signed-panel"><strong>店舗責任者LINE確認済み</strong><span>{selected.confirmed_by} · {new Date(selected.confirmed_at).toLocaleString("ja-JP")}</span></div> : <div className="line-confirmation-pending"><MessageCircle size={20}/><div><strong>店舗責任者のLINE確認待ち</strong><span>店舗責任者がLINEの承認ボタンを押すと確認済みになります。</span></div></div>}
         </div>)}
       </DialogContent>
     </Dialog>
     <Dialog open={deleteOpen} onOpenChange={open=>{setDeleteOpen(open);if(!open){setDeletePassword("");setDeleteError("");}}}>
-      <DialogContent className="delete-dialog"><DialogHeader><DialogTitle>この月の記録を削除</DialogTitle><DialogDescription>{store}の{Number(month.slice(0,4))}年{Number(month.slice(5,7))}月の記録をすべて削除します。</DialogDescription></DialogHeader><div className="delete-warning"><Trash2 size={20}/><p>レシート・ホールコン画像・月末のホールコン写真・店舗責任者サインも削除され、元に戻せません。</p></div><label htmlFor="delete-password">削除パスワード</label><Input id="delete-password" type="password" value={deletePassword} onChange={event=>setDeletePassword(event.target.value)} autoComplete="off" placeholder="パスワードを入力"/>{deleteError && <p className="form-alert error" role="alert">{deleteError}</p>}<button type="button" className="confirm-delete-button" disabled={deleting || !deletePassword} onClick={deleteMonthRecords}>{deleting?"削除中…":"この月の記録を削除する"}</button></DialogContent>
+      <DialogContent className="delete-dialog"><DialogHeader><DialogTitle>この月の記録を削除</DialogTitle><DialogDescription>{store}の{Number(month.slice(0,4))}年{Number(month.slice(5,7))}月の記録をすべて削除します。</DialogDescription></DialogHeader><div className="delete-warning"><Trash2 size={20}/><p>レシート・ホールコン画像・月末のホールコン写真も削除され、元に戻せません。</p></div><label htmlFor="delete-password">削除パスワード</label><Input id="delete-password" type="password" value={deletePassword} onChange={event=>setDeletePassword(event.target.value)} autoComplete="off" placeholder="パスワードを入力"/>{deleteError && <p className="form-alert error" role="alert">{deleteError}</p>}<button type="button" className="confirm-delete-button" disabled={deleting || !deletePassword} onClick={deleteMonthRecords}>{deleting?"削除中…":"この月の記録を削除する"}</button></DialogContent>
     </Dialog>
   </main>;
 }
